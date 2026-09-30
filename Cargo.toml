@@ -1,5 +1,5 @@
 [package]
-name = "singularity-cli"
+name = "singularitycli"
 version = "0.1.0"
 edition = "2021"
 description = "Universal project command runner. One set of commands for every project type."

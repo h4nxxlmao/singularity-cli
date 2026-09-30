@@ -16,7 +16,7 @@ irm https://raw.githubusercontent.com/h4nxxlmao/singularity-cli/main/install.ps1
 
 ```sh
 # Cargo
-cargo install --git https://github.com/h4nxxlmao/singularity-cli
+cargo install singularitycli
 ```
 
 ## What it detects

@@ -32,6 +32,9 @@ irm https://raw.githubusercontent.com/h4nxxlmao/singularity-cli/main/install.ps1
 Install directly with Cargo:
 
 ```sh
+# From crates.io
+cargo install singularitycli
+
 # From Git repository
 cargo install --git https://github.com/h4nxxlmao/singularity-cli
 
