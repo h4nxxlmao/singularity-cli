@@ -1,0 +1,1 @@
+{"name":"myapp","scripts":{"dev":"vite","test":"jest","build":"tsc","lint":"eslint .","format":"prettier --write ."}}

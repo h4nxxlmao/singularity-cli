@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Install artifacts
+*.tar.gz
+*.zip
+SHA256SUMS
+
+# singularity.toml is per-project, not committed here (it's the tool itself)
+# singularity.toml

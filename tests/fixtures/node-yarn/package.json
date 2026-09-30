@@ -1,0 +1,1 @@
+{"name":"myapp","scripts":{"dev":"next dev","test":"jest","build":"next build"}}

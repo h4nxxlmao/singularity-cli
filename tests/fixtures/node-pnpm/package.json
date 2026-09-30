@@ -1,0 +1,1 @@
+{"name":"myapp","scripts":{"dev":"vite","test":"vitest","build":"vite build"}}
