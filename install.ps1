@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$Repo    = "singularity-cli/singularity-cli"
+$Repo    = "h4nxxlmao/singularity-cli"
 $Bin     = "sgl.exe"
 $InstDir = if ($env:SGL_INSTALL_DIR) { $env:SGL_INSTALL_DIR } else { "$env:USERPROFILE\.local\bin" }
 

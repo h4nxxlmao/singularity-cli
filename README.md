@@ -13,16 +13,33 @@
 
 ## Install
 
+> **Note:** The official site [getsingularity.lol](https://getsingularity.lol/cli) is coming soon. Use the direct GitHub scripts or Cargo install below:
+
+### Shell (Linux / macOS)
+
 ```sh
-# Unix
-curl -fsSL https://getsingularity.lol/cli/install.sh | sh
-
-# PowerShell
-irm https://getsingularity.lol/cli/install.ps1 | iex
-
-# Cargo
-cargo install singularity-cli
+curl -fsSL https://raw.githubusercontent.com/h4nxxlmao/singularity-cli/main/install.sh | sh
 ```
+
+### PowerShell (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/h4nxxlmao/singularity-cli/main/install.ps1 | iex
+```
+
+### Cargo
+
+Install directly with Cargo:
+
+```sh
+# From Git repository
+cargo install --git https://github.com/h4nxxlmao/singularity-cli
+
+# From local checkout
+cargo install --path .
+```
+
+*(Once the site is live, `curl -fsSL https://getsingularity.lol/cli/install.sh | sh` will also be available.)*
 
 ## Commands
 

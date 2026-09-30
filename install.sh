@@ -4,7 +4,7 @@
 
 set -eu
 
-REPO="singularity-cli/singularity-cli"
+REPO="h4nxxlmao/singularity-cli"
 BIN="sgl"
 INSTALL_DIR="${SGL_INSTALL_DIR:-$HOME/.local/bin}"
 

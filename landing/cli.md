@@ -5,15 +5,18 @@
 ## Install
 
 ```sh
-curl -fsSL https://getsingularity.lol/cli/install.sh | sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/h4nxxlmao/singularity-cli/main/install.sh | sh
 ```
 
 ```powershell
-irm https://getsingularity.lol/cli/install.ps1 | iex
+# Windows
+irm https://raw.githubusercontent.com/h4nxxlmao/singularity-cli/main/install.ps1 | iex
 ```
 
 ```sh
-cargo install singularity-cli
+# Cargo
+cargo install --git https://github.com/h4nxxlmao/singularity-cli
 ```
 
 ## What it detects

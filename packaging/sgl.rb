@@ -10,22 +10,22 @@ class SingularityCli < Formula
 
   on_macos do
     on_intel do
-      url "https://github.com/singularity-cli/singularity-cli/releases/download/vVERSION/sgl-vVERSION-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/h4nxxlmao/singularity-cli/releases/download/vVERSION/sgl-vVERSION-x86_64-apple-darwin.tar.gz"
       sha256 "SHA256_MACOS_X86"
     end
     on_arm do
-      url "https://github.com/singularity-cli/singularity-cli/releases/download/vVERSION/sgl-vVERSION-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/h4nxxlmao/singularity-cli/releases/download/vVERSION/sgl-vVERSION-aarch64-apple-darwin.tar.gz"
       sha256 "SHA256_MACOS_ARM"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/singularity-cli/singularity-cli/releases/download/vVERSION/sgl-vVERSION-x86_64-unknown-linux-musl.tar.gz"
+      url "https://github.com/h4nxxlmao/singularity-cli/releases/download/vVERSION/sgl-vVERSION-x86_64-unknown-linux-musl.tar.gz"
       sha256 "SHA256_LINUX_X86"
     end
     on_arm do
-      url "https://github.com/singularity-cli/singularity-cli/releases/download/vVERSION/sgl-vVERSION-aarch64-unknown-linux-musl.tar.gz"
+      url "https://github.com/h4nxxlmao/singularity-cli/releases/download/vVERSION/sgl-vVERSION-aarch64-unknown-linux-musl.tar.gz"
       sha256 "SHA256_LINUX_ARM"
     end
   end
