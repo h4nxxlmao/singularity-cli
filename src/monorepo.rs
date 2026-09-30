@@ -52,7 +52,28 @@ pub fn discover(root: &Path) -> Vec<Project> {
 /// and return all detected sub-projects.
 pub fn discover_with_depth(root: &Path, max_depth: usize) -> Vec<Project> {
     let mut projects: Vec<Project> = Vec::new();
-    let skip_dirs = ["node_modules", "target", ".venv", "dist", ".git", "build"];
+    let skip_dirs = [
+        "node_modules",
+        "target",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "dist",
+        "build",
+        "out",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".turbo",
+        ".cache",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "bin",
+        "obj",
+        "vendor",
+        ".git",
+    ];
 
     let walker = WalkBuilder::new(root)
         .max_depth(Some(max_depth))

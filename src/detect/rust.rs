@@ -42,20 +42,21 @@ impl Detector for RustDetector {
                 CommandPlan::simple("cargo", ["fetch"], cwd, "cargo fetch: Cargo.toml found")
             }
             Verb::Dev => {
-                // Prefer cargo-watch if available, else cargo run
-                let primary = CommandPlan::simple(
-                    "cargo",
-                    ["watch", "-x", "run"],
-                    cwd.clone(),
-                    "cargo watch: installed",
-                );
-                let fallback = CommandPlan::simple(
-                    "cargo",
-                    ["run"],
-                    cwd,
-                    "cargo run (cargo-watch not installed)",
-                );
-                primary.with_fallback(fallback)
+                if which::which("cargo-watch").is_ok() {
+                    CommandPlan::simple(
+                        "cargo",
+                        ["watch", "-x", "run"],
+                        cwd,
+                        "cargo watch -x run (cargo-watch found)",
+                    )
+                } else {
+                    CommandPlan::simple(
+                        "cargo",
+                        ["run"],
+                        cwd,
+                        "cargo run (cargo-watch not on PATH)",
+                    )
+                }
             }
             Verb::Test => {
                 CommandPlan::simple("cargo", ["test"], cwd, "cargo test: Cargo.toml found")
@@ -174,5 +175,29 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let d = RustDetector;
         assert!(d.detect(tmp.path()).is_none());
+    }
+}
+#[test]
+fn dev_uses_cargo_run_when_cargo_watch_absent() {
+    use tempfile::TempDir;
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"app\"").unwrap();
+
+    let d = RustDetector;
+    let p = <RustDetector as super::Detector>::detect(&d, dir).unwrap();
+
+    let plan = <RustDetector as super::Detector>::plan(&d, &p, &crate::detect::Verb::Dev).unwrap();
+    let cargo_watch_found = which::which("cargo-watch").is_ok();
+    if cargo_watch_found {
+        assert!(
+            plan.reason.contains("found")
+                || plan.program == "cargo" && plan.args.contains(&"watch".to_string())
+        );
+    } else {
+        assert_eq!(plan.program, "cargo");
+        assert!(plan.args.contains(&"run".to_string()));
+        assert!(!plan.args.contains(&"watch".to_string()));
+        assert!(plan.reason.contains("not on PATH") || plan.reason.contains("cargo run"));
     }
 }

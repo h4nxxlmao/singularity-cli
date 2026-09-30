@@ -14,9 +14,9 @@ pub async fn run(plan: &CommandPlan, ui: &Ui, dry_run: bool) -> Result<i32> {
     let cmd_display = format_cmd(plan);
     if dry_run {
         if ui.color {
-            eprintln!("  {}", format!("→ {cmd_display}").cyan());
+            println!("  {}", format!("→ {cmd_display}").cyan());
         } else {
-            eprintln!("  → {cmd_display}");
+            println!("  → {cmd_display}");
         }
         return Ok(0);
     }
@@ -88,15 +88,27 @@ pub async fn run(plan: &CommandPlan, ui: &Ui, dry_run: bool) -> Result<i32> {
         }
 
         let mut cmd = build_shell_command(raw_cmd, plan);
+        if ui.verbose {
+            if let Some(r) = resolved.as_ref() {
+                eprintln!("  [verbose] resolved: {}", r.display());
+            }
+        }
+        let start = std::time::Instant::now();
         let mut child = cmd.spawn()?;
 
         tokio::select! {
             status = child.wait() => {
                 let status = status?;
+                if ui.verbose {
+                    eprintln!("  [verbose] duration: {:?}", start.elapsed());
+                }
                 Ok(status.code().unwrap_or(1))
             }
             _ = tokio::signal::ctrl_c() => {
                 let _ = child.kill().await;
+                if ui.verbose {
+                    eprintln!("  [verbose] duration: {:?}", start.elapsed());
+                }
                 Ok(130)
             }
         }
@@ -124,16 +136,35 @@ pub async fn run(plan: &CommandPlan, ui: &Ui, dry_run: bool) -> Result<i32> {
             }
         };
 
-        let mut cmd = build_command(plan, &resolved_path);
+        let mut cmd = tokio::process::Command::new(&resolved_path);
+        cmd.args(&plan.args);
+        cmd.current_dir(&plan.cwd);
+        cmd.stdin(Stdio::inherit());
+        cmd.stdout(Stdio::inherit());
+        cmd.stderr(Stdio::inherit());
+        for (k, v) in &plan.env {
+            cmd.env(k, v);
+        }
+
+        if ui.verbose {
+            eprintln!("  [verbose] resolved: {}", resolved_path.display());
+        }
+        let start = std::time::Instant::now();
         let mut child = cmd.spawn()?;
 
         tokio::select! {
             status = child.wait() => {
                 let status = status?;
+                if ui.verbose {
+                    eprintln!("  [verbose] duration: {:?}", start.elapsed());
+                }
                 Ok(status.code().unwrap_or(1))
             }
             _ = tokio::signal::ctrl_c() => {
                 let _ = child.kill().await;
+                if ui.verbose {
+                    eprintln!("  [verbose] duration: {:?}", start.elapsed());
+                }
                 Ok(130)
             }
         }
@@ -598,9 +629,19 @@ pub fn build_shell_command(raw_cmd: &str, plan: &CommandPlan) -> tokio::process:
 pub fn explain_plan(plan: &CommandPlan, reason: &str, ui: &Ui) {
     let cmd_str = format_cmd(plan);
     if ui.color {
-        eprintln!("  {}", format!("→ {cmd_str}").cyan());
+        eprintln!("  {}", format!("? {cmd_str}").cyan());
     } else {
-        eprintln!("  → {cmd_str}");
+        eprintln!("  ? {cmd_str}");
+    }
+    if ui.verbose {
+        let first_token = plan
+            .raw_shell
+            .as_deref()
+            .and_then(|s| s.split_whitespace().next())
+            .unwrap_or(&plan.program);
+        if let Some(resolved) = resolve_program(first_token, &plan.cwd) {
+            eprintln!("     program: {}", resolved.display());
+        }
     }
     eprintln!("     cwd:    {}", plan.cwd.display());
     if !plan.env.is_empty() {

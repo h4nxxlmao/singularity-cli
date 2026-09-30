@@ -196,7 +196,7 @@ fn make_run_target() {
         .arg(fixtures().join("make"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("make build"));
+        .stdout(predicate::str::contains("make build"));
 }
 
 #[test]
@@ -405,7 +405,7 @@ fn go_with_makefile_precedence() {
         .arg(fixtures().join("go-with-makefile"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("make custom"));
+        .stdout(predicate::str::contains("make custom"));
 }
 
 #[test]
@@ -1313,35 +1313,35 @@ fn npm_run_and_extra_args_passthrough() {
 
 #[test]
 fn unavailable_message_format_consistent_everywhere() {
-    // 1. dotnet dev (unsupported verb for dotnet)
+    // 1. dotnet lint (unsupported verb for dotnet)
     let out_dotnet = sgl()
-        .args(["dev", "--cwd"])
-        .arg(fixtures().join("dotnet"))
+        .args(["lint", "--cwd"])
+        .arg(fixtures().join("dotnet-multi"))
         .output()
         .unwrap();
     assert_eq!(out_dotnet.status.code(), Some(1));
     let stderr_dotnet = String::from_utf8_lossy(&out_dotnet.stderr);
     assert!(
-        stderr_dotnet.contains("sgl: no 'dev' command for this project (dotnet)"),
+        stderr_dotnet.contains("sgl: no 'lint' command for this project (dotnet)"),
         "expected header, got: {stderr_dotnet}"
     );
     assert!(stderr_dotnet.contains("path:"));
-    assert!(stderr_dotnet.contains("reason: verb 'dev' is not supported for dotnet projects"));
+    assert!(stderr_dotnet.contains("reason: verb 'lint' is not supported for dotnet projects"));
     assert!(stderr_dotnet.contains("available: setup, build, test, fmt, run"));
-    assert!(stderr_dotnet.contains("hint: define 'dev' in singularity.toml under [commands]"));
+    assert!(stderr_dotnet.contains("hint: define 'lint' in singularity.toml under [commands]"));
 
     // 2. Directory with no project detected
     let tmp = tempfile::TempDir::new().unwrap();
     let empty_dir = tmp.path();
     let out_empty = sgl()
-        .args(["dev", "--cwd"])
+        .args(["lint", "--cwd"])
         .arg(empty_dir)
         .output()
         .unwrap();
     assert_eq!(out_empty.status.code(), Some(1));
     let stderr_empty = String::from_utf8_lossy(&out_empty.stderr);
     assert!(
-        stderr_empty.contains("sgl: no 'dev' command for this project (no project detected)"),
+        stderr_empty.contains("sgl: no 'lint' command for this project (no project detected)"),
         "expected header for empty dir, got: {stderr_empty}"
     );
     assert!(stderr_empty.contains("path:"));
@@ -1429,4 +1429,293 @@ custom-task:
     assert!(stderr_dev.contains(
         "hint: add a \"dev\" recipe to justfile, or define it in singularity.toml under [commands]"
     ));
+}
+#[test]
+fn init_dry_run_does_not_write_files() {
+    use tempfile::TempDir;
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
+
+    sgl()
+        .args(["init", "--dry-run", "--cwd"])
+        .arg(dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("singularity.toml"))
+        .stdout(predicate::str::contains("[commands]"));
+
+    let entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1, "init --dry-run must not write any files");
+}
+
+#[test]
+fn init_refuses_to_overwrite_existing_config() {
+    use tempfile::TempDir;
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
+    std::fs::write(dir.join("singularity.toml"), "[commands]\n").unwrap();
+
+    sgl()
+        .args(["init", "--cwd"])
+        .arg(dir)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already exists"));
+
+    let content = std::fs::read_to_string(dir.join("singularity.toml")).unwrap();
+    assert_eq!(content, "[commands]\n");
+}
+
+#[test]
+fn rust_dev_explain_states_reason() {
+    let out = sgl()
+        .args(["--explain", "dev", "--cwd"])
+        .arg(fixtures().join("rust"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cargo"),
+        "expected cargo in explain output: {stderr}"
+    );
+    assert!(
+        stderr.contains("found") || stderr.contains("PATH") || stderr.contains("cargo run"),
+        "explain must state why: {stderr}"
+    );
+}
+
+#[test]
+fn dotnet_single_project_dev() {
+    sgl()
+        .args(["--explain", "dev", "--cwd"])
+        .arg(fixtures().join("dotnet-single"))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dotnet run"));
+}
+
+#[test]
+fn dotnet_multi_project_dev_unavailable() {
+    sgl()
+        .args(["dev", "--cwd"])
+        .arg(fixtures().join("dotnet-multi"))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("sgl: no 'dev' command"));
+}
+
+#[test]
+fn next_dir_is_skipped_during_discovery() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"nextjs-app","scripts":{"dev":"next dev"}}"#,
+    )
+    .unwrap();
+    let next_dev = root.join(".next").join("dev");
+    std::fs::create_dir_all(&next_dev).unwrap();
+    std::fs::write(
+        next_dev.join("package.json"),
+        r#"{"name":"internal","scripts":{"dev":"echo"}}"#,
+    )
+    .unwrap();
+
+    let out = sgl()
+        .args(["info", "--json", "--cwd"])
+        .arg(root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"internal\""),
+        "discover must not enter .next directory, found: {:?}",
+        stdout
+    );
+}
+
+#[test]
+fn nested_monorepo_with_workspace_root() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"root","workspaces":["packages/*"]}"#,
+    )
+    .unwrap();
+    let pkg_a = root.join("packages").join("a");
+    let pkg_b = root.join("packages").join("b");
+    std::fs::create_dir_all(&pkg_a).unwrap();
+    std::fs::create_dir_all(&pkg_b).unwrap();
+    std::fs::write(
+        pkg_a.join("package.json"),
+        r#"{"name":"pkg-a","scripts":{"build":"tsc"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        pkg_b.join("package.json"),
+        r#"{"name":"pkg-b","scripts":{"build":"tsc"}}"#,
+    )
+    .unwrap();
+
+    let out = sgl()
+        .args(["info", "--json", "--cwd"])
+        .arg(root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let arr = json["projects"].as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        3,
+        "should find root + 2 child packages. found: {:?}",
+        arr
+    );
+    let names: Vec<&str> = arr.iter().map(|o| o["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"root"));
+    assert!(names.contains(&"pkg-a"));
+    assert!(names.contains(&"pkg-b"));
+}
+
+#[test]
+fn verbose_output_is_superset_of_normal_output() {
+    let normal = sgl()
+        .args(["--explain", "test", "--cwd"])
+        .arg(fixtures().join("rust"))
+        .output()
+        .unwrap();
+    let normal_stderr = String::from_utf8_lossy(&normal.stderr);
+
+    let verbose = sgl()
+        .args(["--verbose", "--explain", "test", "--cwd"])
+        .arg(fixtures().join("rust"))
+        .output()
+        .unwrap();
+    let verbose_stderr = String::from_utf8_lossy(&verbose.stderr);
+
+    for line in normal_stderr.lines() {
+        if !line.trim().is_empty() {
+            assert!(
+                verbose_stderr.contains(line.trim()),
+                "verbose missing line from normal: {line:?}\nverbose: {verbose_stderr}"
+            );
+        }
+    }
+
+    assert!(
+        verbose_stderr.len() > normal_stderr.len(),
+        "verbose output should be longer than normal"
+    );
+}
+
+#[test]
+fn dry_run_prints_command_to_stdout() {
+    let out = sgl()
+        .args(["--dry-run", "test", "--cwd"])
+        .arg(fixtures().join("rust"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("?") || stdout.contains("cargo test"),
+        "dry-run arrow line must be in stdout, not stderr. stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
+#[test]
+fn empty_dir_message_is_lowercase() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    sgl()
+        .args(["info", "--cwd"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::is_match("(?i)no projects").unwrap());
+
+    let out = sgl()
+        .args(["info", "--cwd"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("No projects"),
+        "message must be lowercase: {stderr}"
+    );
+}
+
+#[test]
+fn changed_flag_picks_up_untracked_new_file() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+
+    for cmd in &[
+        vec!["init"],
+        vec!["config", "user.name", "Test"],
+        vec!["config", "user.email", "t@t.com"],
+    ] {
+        std::process::Command::new("git")
+            .args(cmd)
+            .current_dir(root)
+            .output()
+            .unwrap();
+    }
+
+    let proj_a = root.join("proj_a");
+    std::fs::create_dir_all(&proj_a).unwrap();
+    std::fs::write(
+        proj_a.join("package.json"),
+        r#"{"name":"proj_a","scripts":{"test":"echo a"}}"#,
+    )
+    .unwrap();
+
+    let proj_b = root.join("proj_b");
+    std::fs::create_dir_all(&proj_b).unwrap();
+    std::fs::write(
+        proj_b.join("package.json"),
+        r#"{"name":"proj_b","scripts":{"test":"echo b"}}"#,
+    )
+    .unwrap();
+
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    std::fs::write(proj_b.join("new_file.js"), "// new").unwrap();
+
+    let out = sgl()
+        .args(["--dry-run", "test", "--changed", "--cwd"])
+        .arg(root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("proj_b"),
+        "proj_b with untracked file should be picked up by --changed: {stdout}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn singularity_toml_commands_with_special_chars_windows() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    std::fs::write(
+        dir.join("singularity.toml"),
+        r#"[commands]
+test = "cmd /C \"echo hello & echo world\"""#,
+    )
+    .unwrap();
+    sgl().args(["test", "--cwd"]).arg(dir).assert().success();
 }

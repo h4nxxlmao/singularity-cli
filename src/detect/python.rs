@@ -7,17 +7,28 @@ use super::{CommandPlan, Detector, InstallHint, Project, ProjectKind, ToolRequir
 
 pub struct PythonDetector;
 
-fn detect_manager(dir: &Path) -> &'static str {
+fn detect_manager(dir: &Path) -> (&'static str, &'static str) {
     if dir.join("uv.lock").exists() {
-        return "uv";
+        return ("uv", "uv.lock found");
     }
     if dir.join("poetry.lock").exists() {
-        return "poetry";
+        return ("poetry", "poetry.lock found");
     }
     if dir.join("Pipfile.lock").exists() {
-        return "pipenv";
+        return ("pipenv", "Pipfile.lock found");
     }
-    "pip"
+
+    let pyproject = dir.join("pyproject.toml");
+    if pyproject.exists() {
+        let content = std::fs::read_to_string(&pyproject).unwrap_or_default();
+        if content.contains("[tool.uv]") {
+            return ("uv", "[tool.uv] in pyproject.toml");
+        }
+        if content.contains("[tool.poetry]") {
+            return ("poetry", "[tool.poetry] in pyproject.toml");
+        }
+    }
+    ("pip", "requirements.txt or pyproject.toml found")
 }
 
 /// Detect Django/FastAPI/Flask for dev command.
@@ -76,7 +87,7 @@ impl Detector for PythonDetector {
             return None;
         }
 
-        let pm = detect_manager(dir);
+        let (pm, _) = detect_manager(dir);
 
         Some(Project {
             name: dir_name(dir).to_string(),
@@ -88,27 +99,20 @@ impl Detector for PythonDetector {
     }
 
     fn plan(&self, project: &Project, verb: &Verb) -> Option<CommandPlan> {
-        let pm = project.package_manager.as_deref().unwrap_or("pip");
+        let (pm, reason) = detect_manager(&project.root);
         let cwd = project.root.clone();
 
         match verb {
             Verb::Setup => {
                 let plan = match pm {
-                    "uv" => CommandPlan::simple("uv", ["sync"], cwd, "uv: uv.lock found"),
-                    "poetry" => {
-                        CommandPlan::simple("poetry", ["install"], cwd, "poetry: poetry.lock found")
-                    }
-                    "pipenv" => CommandPlan::simple(
-                        "pipenv",
-                        ["install"],
-                        cwd,
-                        "pipenv: Pipfile.lock found",
-                    ),
+                    "uv" => CommandPlan::simple("uv", ["sync"], cwd, reason),
+                    "poetry" => CommandPlan::simple("poetry", ["install"], cwd, reason),
+                    "pipenv" => CommandPlan::simple("pipenv", ["install"], cwd, reason),
                     _ => CommandPlan::simple(
                         "pip",
                         ["install", "-r", "requirements.txt"],
                         cwd,
-                        "pip: requirements.txt found",
+                        reason,
                     ),
                 };
                 Some(plan)

@@ -155,7 +155,7 @@ async fn run(args: Cli) -> Result<()> {
             0
         }
         Commands::Init => {
-            init_config(&cwd, cfg, &ui)?;
+            init_config(&cwd, cfg, &ui, args.dry_run)?;
             0
         }
         Commands::Completions { shell } => {
@@ -244,7 +244,7 @@ async fn run_verb_with_args(
 
 fn print_info(cwd: &Path, cfg: Option<&config::Config>, _ui: &Ui, json: bool) {
     let subs = monorepo::discover(cwd);
-    let projects = if subs.len() > 1 || (!subs.is_empty() && monorepo::is_workspace_root(cwd)) {
+    let mut projects = if subs.len() > 1 || (!subs.is_empty() && monorepo::is_workspace_root(cwd)) {
         subs
     } else {
         let top = detect_all(cwd);
@@ -254,6 +254,12 @@ fn print_info(cwd: &Path, cfg: Option<&config::Config>, _ui: &Ui, json: bool) {
             top
         }
     };
+    if projects.len() > 1 {
+        let top = detect_all(cwd);
+        if !top.is_empty() {
+            projects.insert(0, top[0].clone());
+        }
+    }
 
     if json {
         let val = serde_json::json!({
@@ -267,7 +273,7 @@ fn print_info(cwd: &Path, cfg: Option<&config::Config>, _ui: &Ui, json: bool) {
     }
 
     if projects.is_empty() {
-        eprintln!("No projects detected in this directory.");
+        eprintln!("no projects detected in this directory.");
         return;
     }
 
@@ -342,10 +348,10 @@ const VERB_LIST: &[(&str, &str)] = &[
     ("completions <shell>", "print shell completions"),
 ];
 
-fn init_config(cwd: &Path, _cfg: Option<&config::Config>, ui: &Ui) -> Result<()> {
+fn init_config(cwd: &Path, _cfg: Option<&config::Config>, ui: &Ui, dry_run: bool) -> Result<()> {
     let projects = detect_all(cwd);
     if projects.is_empty() {
-        ui.warn("no projects detected; nothing to write");
+        ui.warn("no projects detected in this directory; nothing to write");
         return Ok(());
     }
 
@@ -368,8 +374,15 @@ fn init_config(cwd: &Path, _cfg: Option<&config::Config>, ui: &Ui) -> Result<()>
     lines.push("[env]".to_string());
     lines.push("# environment variables for all commands".to_string());
 
-    std::fs::write(&dest, lines.join("\n"))?;
-    ui.success(&format!("wrote {}", dest.display()));
+    let content = lines.join("\n");
+    if dry_run {
+        println!("{}", dest.display());
+        println!("{}", content);
+    } else {
+        std::fs::write(&dest, &content)?;
+        println!("{}", content);
+        ui.success(&format!("wrote {}", dest.display()));
+    }
     Ok(())
 }
 

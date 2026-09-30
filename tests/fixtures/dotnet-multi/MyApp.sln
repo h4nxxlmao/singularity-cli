@@ -1,0 +1,4 @@
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App1", "App1.csproj", "{GUID}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App2", "App2.csproj", "{GUID}"
+EndProject
