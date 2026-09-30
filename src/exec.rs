@@ -13,10 +13,11 @@ use owo_colors::OwoColorize;
 pub async fn run(plan: &CommandPlan, ui: &Ui, dry_run: bool) -> Result<i32> {
     let cmd_display = format_cmd(plan);
     if dry_run {
+        let arrow = ui.arrow();
         if ui.color {
-            println!("  {}", format!("→ {cmd_display}").cyan());
+            println!("  {}", format!("{arrow} {cmd_display}").cyan());
         } else {
-            println!("  → {cmd_display}");
+            println!("  {arrow} {cmd_display}");
         }
         return Ok(0);
     }
@@ -625,13 +626,14 @@ pub fn build_shell_command(raw_cmd: &str, plan: &CommandPlan) -> tokio::process:
     cmd
 }
 
-/// Print plan details for --explain mode (does not run).
+/// Print plan details for --explain mode (does not run). Output goes to stdout.
 pub fn explain_plan(plan: &CommandPlan, reason: &str, ui: &Ui) {
     let cmd_str = format_cmd(plan);
+    let arrow = ui.arrow();
     if ui.color {
-        eprintln!("  {}", format!("? {cmd_str}").cyan());
+        println!("  {}", format!("{arrow} {cmd_str}").cyan());
     } else {
-        eprintln!("  ? {cmd_str}");
+        println!("  {arrow} {cmd_str}");
     }
     if ui.verbose {
         let first_token = plan
@@ -640,15 +642,15 @@ pub fn explain_plan(plan: &CommandPlan, reason: &str, ui: &Ui) {
             .and_then(|s| s.split_whitespace().next())
             .unwrap_or(&plan.program);
         if let Some(resolved) = resolve_program(first_token, &plan.cwd) {
-            eprintln!("     program: {}", resolved.display());
+            println!("     program: {}", resolved.display());
         }
     }
-    eprintln!("     cwd:    {}", plan.cwd.display());
+    println!("     cwd:    {}", plan.cwd.display());
     if !plan.env.is_empty() {
         let env_display: Vec<String> = plan.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        eprintln!("     env:    {}", env_display.join(", "));
+        println!("     env:    {}", env_display.join(", "));
     }
-    eprintln!("     reason: {reason}");
+    println!("     reason: {reason}");
 }
 
 #[cfg(test)]

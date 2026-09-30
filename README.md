@@ -62,6 +62,13 @@ cargo install --path .
 
 Global flags: `--dry-run`, `--verbose`, `--quiet`, `--no-color`, `--cwd <path>`, `--project <name>`, `--changed`, `--serial`, `--fail-fast`, `--explain <verb>`, `--json`.
 
+### Output prefixes & terminal fallback
+
+For commands that display planned actions (`--dry-run`, `--explain <verb>`, and execution traces), `sgl` prefixes commands with an arrow:
+- In UTF-8-capable terminals with color enabled, `sgl` outputs Unicode `→`.
+- When stdout is not a UTF-8-capable terminal (e.g. redirected to a file or pipe), or when `NO_COLOR` or `--no-color` is set, `sgl` automatically falls back to ASCII `->`.
+- On Windows, `sgl` sets the console output code page to UTF-8 (65001) at startup and restores the previous code page on exit.
+
 ## Supported ecosystems
 
 | Ecosystem | Detected by | Package managers |

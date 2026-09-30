@@ -246,6 +246,7 @@ pub async fn run_monorepo(
         let extra_args = opts.extra_args.clone();
         let dry_run = opts.dry_run;
         let quiet = ui.quiet;
+        let unicode = ui.unicode;
         let fail_fast = opts.fail_fast;
         let verb_display = verb_name.clone();
 
@@ -296,7 +297,8 @@ pub async fn run_monorepo(
                 }
 
                 for plan in res.plans {
-                    let c = run_prefixed_command(&plan, &project.name, dry_run, quiet).await;
+                    let c =
+                        run_prefixed_command(&plan, &project.name, dry_run, quiet, unicode).await;
                     match c {
                         Ok(exit) if exit != 0 => {
                             code = exit;
@@ -367,10 +369,11 @@ async fn run_dev_monorepo(
                 for plan in res.plans {
                     let cmd_str = format!("[{}] {}", project.name, crate::exec::format_cmd(&plan));
                     if opts.dry_run {
+                        let arrow = ui.arrow();
                         if ui.color {
-                            eprintln!("  {}", format!("→ {cmd_str}").cyan());
+                            println!("  {}", format!("{arrow} {cmd_str}").cyan());
                         } else {
-                            eprintln!("  → {cmd_str}");
+                            println!("  {arrow} {cmd_str}");
                         }
                         continue;
                     }
@@ -441,15 +444,17 @@ async fn run_prefixed_command(
     project_name: &str,
     dry_run: bool,
     quiet: bool,
+    unicode: bool,
 ) -> Result<i32> {
+    let arrow = if unicode { "→" } else { "->" };
     let cmd_str = crate::exec::format_cmd(plan);
     if dry_run {
-        println!("  → [{project_name}] {cmd_str}");
+        println!("  {arrow} [{project_name}] {cmd_str}");
         return Ok(0);
     }
 
     if !quiet {
-        println!("  → [{project_name}] {cmd_str}");
+        println!("  {arrow} [{project_name}] {cmd_str}");
     }
 
     let mut cmd = if let Some(raw) = &plan.raw_shell {

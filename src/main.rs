@@ -25,10 +25,44 @@ use ui::Ui;
 
 #[tokio::main]
 async fn main() {
+    // On Windows, switch the console output to UTF-8 so "→" renders correctly.
+    // The guard restores the original code page when it is dropped.
+    #[cfg(windows)]
+    let _cp_guard = ConsoleCodePageGuard::new(65001);
+
     let args = cli::parse();
     if let Err(e) = run(args).await {
         eprintln!("sgl: {e:#}");
         process::exit(1);
+    }
+}
+
+/// RAII guard that sets the Windows console output code page and restores it on drop.
+#[cfg(windows)]
+struct ConsoleCodePageGuard {
+    original: u32,
+}
+
+#[cfg(windows)]
+impl ConsoleCodePageGuard {
+    fn new(cp: u32) -> Self {
+        extern "system" {
+            fn GetConsoleOutputCP() -> u32;
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+        }
+        let original = unsafe { GetConsoleOutputCP() };
+        unsafe { SetConsoleOutputCP(cp) };
+        ConsoleCodePageGuard { original }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ConsoleCodePageGuard {
+    fn drop(&mut self) {
+        extern "system" {
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+        }
+        unsafe { SetConsoleOutputCP(self.original) };
     }
 }
 

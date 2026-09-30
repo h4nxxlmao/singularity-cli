@@ -1,7 +1,8 @@
-//! Integration tests: run `sgl --explain <verb>` against each fixture.
+//! Integration tests for singularity-cli.
 //!
-//! --explain prints to stderr. We check stderr with predicates::str::contains.
-//! --dry-run is used so no real toolchains are needed.
+//! --explain output (command line and plan details) goes to stdout.
+//! Errors go to stderr.
+//! --dry-run "→" lines go to stdout.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -26,7 +27,7 @@ fn node_npm_dev() {
         .arg(fixtures().join("node-npm"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("npm run dev"));
+        .stdout(predicate::str::contains("npm run dev"));
 }
 
 #[test]
@@ -36,7 +37,7 @@ fn node_npm_test() {
         .arg(fixtures().join("node-npm"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("npm run test"));
+        .stdout(predicate::str::contains("npm run test"));
 }
 
 #[test]
@@ -46,7 +47,7 @@ fn node_npm_build() {
         .arg(fixtures().join("node-npm"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("npm run build"));
+        .stdout(predicate::str::contains("npm run build"));
 }
 
 #[test]
@@ -56,7 +57,7 @@ fn node_npm_fmt() {
         .arg(fixtures().join("node-npm"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("npm run format"));
+        .stdout(predicate::str::contains("npm run format"));
 }
 
 #[test]
@@ -66,7 +67,7 @@ fn node_pnpm_dev() {
         .arg(fixtures().join("node-pnpm"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("pnpm run dev"));
+        .stdout(predicate::str::contains("pnpm run dev"));
 }
 
 #[test]
@@ -76,7 +77,7 @@ fn node_yarn_test() {
         .arg(fixtures().join("node-yarn"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("yarn test"));
+        .stdout(predicate::str::contains("yarn test"));
 }
 
 #[test]
@@ -86,7 +87,7 @@ fn node_bun_dev() {
         .arg(fixtures().join("node-bun"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("bun run dev"));
+        .stdout(predicate::str::contains("bun run dev"));
 }
 
 // ─── Python ────────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ fn python_uv_test() {
         .arg(fixtures().join("python-uv"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("uv"));
+        .stdout(predicate::str::contains("uv"));
 }
 
 #[test]
@@ -108,7 +109,7 @@ fn python_uv_setup() {
         .arg(fixtures().join("python-uv"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("uv sync"));
+        .stdout(predicate::str::contains("uv sync"));
 }
 
 #[test]
@@ -118,7 +119,7 @@ fn python_poetry_test() {
         .arg(fixtures().join("python-poetry"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("poetry"));
+        .stdout(predicate::str::contains("poetry"));
 }
 
 #[test]
@@ -128,7 +129,7 @@ fn python_pip_test() {
         .arg(fixtures().join("python-pip"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("pytest"));
+        .stdout(predicate::str::contains("pytest"));
 }
 
 // ─── Rust ──────────────────────────────────────────────────────────────────
@@ -140,7 +141,7 @@ fn rust_test() {
         .arg(fixtures().join("rust"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("cargo test"));
+        .stdout(predicate::str::contains("cargo test"));
 }
 
 #[test]
@@ -150,7 +151,7 @@ fn rust_lint() {
         .arg(fixtures().join("rust"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("cargo clippy"));
+        .stdout(predicate::str::contains("cargo clippy"));
 }
 
 #[test]
@@ -160,7 +161,7 @@ fn rust_fmt() {
         .arg(fixtures().join("rust"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("cargo fmt"));
+        .stdout(predicate::str::contains("cargo fmt"));
 }
 
 // ─── Go ────────────────────────────────────────────────────────────────────
@@ -172,7 +173,7 @@ fn go_test() {
         .arg(fixtures().join("go"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("go test ./..."));
+        .stdout(predicate::str::contains("go test ./..."));
 }
 
 #[test]
@@ -182,7 +183,7 @@ fn go_fmt() {
         .arg(fixtures().join("go"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("gofmt"));
+        .stdout(predicate::str::contains("gofmt"));
 }
 
 // ─── Make ──────────────────────────────────────────────────────────────────
@@ -206,7 +207,7 @@ fn make_test_verb() {
         .arg(fixtures().join("make"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("make test"));
+        .stdout(predicate::str::contains("make test"));
 }
 
 // ─── Docker Compose ────────────────────────────────────────────────────────
@@ -218,7 +219,7 @@ fn compose_dev() {
         .arg(fixtures().join("compose"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("docker compose up"));
+        .stdout(predicate::str::contains("docker compose up"));
 }
 
 #[test]
@@ -228,7 +229,7 @@ fn compose_build() {
         .arg(fixtures().join("compose"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("docker compose build"));
+        .stdout(predicate::str::contains("docker compose build"));
 }
 
 // ─── Java Maven ────────────────────────────────────────────────────────────
@@ -240,7 +241,7 @@ fn java_maven_test() {
         .arg(fixtures().join("java-maven"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("mvn test"));
+        .stdout(predicate::str::contains("mvn test"));
 }
 
 // ─── Monorepo discovery ────────────────────────────────────────────────────
@@ -284,7 +285,7 @@ fn config_override_wins() {
         .arg(dir)
         .assert()
         .success()
-        .stderr(predicate::str::contains("pytest -x --tb=short"));
+        .stdout(predicate::str::contains("pytest -x --tb=short"));
 }
 
 // ─── --dry-run exit zero ───────────────────────────────────────────────────
@@ -342,14 +343,14 @@ fn ruby_bundler_spec_and_rubocop() {
         .arg(fixtures().join("ruby-bundler"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("bundle exec rspec"));
+        .stdout(predicate::str::contains("bundle exec rspec"));
 
     sgl()
         .args(["--explain", "lint", "--cwd"])
         .arg(fixtures().join("ruby-bundler"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("bundle exec rubocop"));
+        .stdout(predicate::str::contains("bundle exec rubocop"));
 }
 
 #[test]
@@ -359,14 +360,14 @@ fn dotnet_build_and_test() {
         .arg(fixtures().join("dotnet"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("dotnet build"));
+        .stdout(predicate::str::contains("dotnet build"));
 
     sgl()
         .args(["--explain", "test", "--cwd"])
         .arg(fixtures().join("dotnet"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("dotnet test"));
+        .stdout(predicate::str::contains("dotnet test"));
 }
 
 #[test]
@@ -376,7 +377,7 @@ fn python_django_dev() {
         .arg(fixtures().join("python-django"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("manage.py runserver"));
+        .stdout(predicate::str::contains("manage.py runserver"));
 }
 
 #[test]
@@ -386,7 +387,7 @@ fn python_fastapi_dev() {
         .arg(fixtures().join("python-fastapi"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("uvicorn"));
+        .stdout(predicate::str::contains("uvicorn"));
 }
 
 #[test]
@@ -397,7 +398,7 @@ fn go_with_makefile_precedence() {
         .arg(fixtures().join("go-with-makefile"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("go test"));
+        .stdout(predicate::str::contains("go test"));
 
     // Custom target is dispatched to make
     sgl()
@@ -415,7 +416,7 @@ fn config_precedence() {
         .arg(fixtures().join("config-override"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("custom-override-test"));
+        .stdout(predicate::str::contains("custom-override-test"));
 }
 
 #[test]
@@ -603,8 +604,8 @@ fn cwd_containing_spaces_works() {
         .arg(&spaced_dir)
         .assert()
         .success()
-        .stderr(predicate::str::contains("cwd:"))
-        .stderr(predicate::str::contains("vsc save 7"));
+        .stdout(predicate::str::contains("cwd:"))
+        .stdout(predicate::str::contains("vsc save 7"));
 }
 
 #[test]
@@ -742,7 +743,7 @@ fn rust_workspace_discovery() {
         .arg(fixtures().join("rust-workspace"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("cargo test"));
+        .stdout(predicate::str::contains("cargo test"));
 }
 
 #[test]
@@ -1026,7 +1027,8 @@ fn doctor_monorepo_discovery_and_project_filter() {
         .iter()
         .map(|t| t["tool"].as_str().unwrap())
         .collect();
-    assert!(tools_all.contains(&"node") || tools_all.contains(&"npm"));
+    assert!(tools_all.contains(&"node"));
+    assert!(tools_all.contains(&"npm"));
     assert!(tools_all.contains(&"cargo"));
 
     // sgl doctor --project web only checks web's tools
@@ -1043,7 +1045,8 @@ fn doctor_monorepo_discovery_and_project_filter() {
         .iter()
         .map(|t| t["tool"].as_str().unwrap())
         .collect();
-    assert!(tools_web.contains(&"node") || tools_web.contains(&"npm"));
+    assert!(tools_web.contains(&"node"));
+    assert!(tools_web.contains(&"npm"));
     assert!(!tools_web.contains(&"cargo"));
 
     // sgl doctor --project api only checks api's tools
@@ -1375,10 +1378,10 @@ custom-task:
         .output()
         .unwrap();
     assert!(out_test.status.success());
-    let stderr_test = String::from_utf8_lossy(&out_test.stderr);
+    let stdout_test = String::from_utf8_lossy(&out_test.stdout);
     assert!(
-        stderr_test.contains("just test"),
-        "expected 'just test', got: {stderr_test}"
+        stdout_test.contains("just test"),
+        "expected 'just test', got: {stdout_test}"
     );
 
     // 2. explain build -> maps to just build
@@ -1388,10 +1391,10 @@ custom-task:
         .output()
         .unwrap();
     assert!(out_build.status.success());
-    let stderr_build = String::from_utf8_lossy(&out_build.stderr);
+    let stdout_build = String::from_utf8_lossy(&out_build.stdout);
     assert!(
-        stderr_build.contains("just build"),
-        "expected 'just build', got: {stderr_build}"
+        stdout_build.contains("just build"),
+        "expected 'just build', got: {stdout_build}"
     );
 
     // 3. run custom-task -> dry-run executes just custom-task
@@ -1475,15 +1478,23 @@ fn rust_dev_explain_states_reason() {
         .arg(fixtures().join("rust"))
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("cargo"),
-        "expected cargo in explain output: {stderr}"
+        stdout.contains("cargo"),
+        "expected cargo in explain output: {stdout}"
     );
-    assert!(
-        stderr.contains("found") || stderr.contains("PATH") || stderr.contains("cargo run"),
-        "explain must state why: {stderr}"
-    );
+    if which::which("cargo-watch").is_ok() {
+        assert!(
+            stdout.contains("cargo watch -x run (cargo-watch found)"),
+            "expected cargo-watch found in reason: {stdout}"
+        );
+    } else {
+        assert!(
+            stdout.contains("cargo run (cargo-watch not on PATH)"),
+            "expected not on PATH in reason: {stdout}"
+        );
+    }
 }
 
 #[test]
@@ -1493,7 +1504,7 @@ fn dotnet_single_project_dev() {
         .arg(fixtures().join("dotnet-single"))
         .assert()
         .success()
-        .stderr(predicate::str::contains("dotnet run"));
+        .stdout(predicate::str::contains("dotnet run"));
 }
 
 #[test]
@@ -1587,26 +1598,26 @@ fn verbose_output_is_superset_of_normal_output() {
         .arg(fixtures().join("rust"))
         .output()
         .unwrap();
-    let normal_stderr = String::from_utf8_lossy(&normal.stderr);
+    let normal_stdout = String::from_utf8_lossy(&normal.stdout);
 
     let verbose = sgl()
         .args(["--verbose", "--explain", "test", "--cwd"])
         .arg(fixtures().join("rust"))
         .output()
         .unwrap();
-    let verbose_stderr = String::from_utf8_lossy(&verbose.stderr);
+    let verbose_stdout = String::from_utf8_lossy(&verbose.stdout);
 
-    for line in normal_stderr.lines() {
+    for line in normal_stdout.lines() {
         if !line.trim().is_empty() {
             assert!(
-                verbose_stderr.contains(line.trim()),
-                "verbose missing line from normal: {line:?}\nverbose: {verbose_stderr}"
+                verbose_stdout.contains(line.trim()),
+                "verbose missing line from normal: {line:?}\nverbose: {verbose_stdout}"
             );
         }
     }
 
     assert!(
-        verbose_stderr.len() > normal_stderr.len(),
+        verbose_stdout.len() > normal_stdout.len(),
         "verbose output should be longer than normal"
     );
 }
@@ -1620,9 +1631,14 @@ fn dry_run_prints_command_to_stdout() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // When stdout is redirected to a pipe (in tests), terminal detection falls back to ASCII "->".
     assert!(
-        stdout.contains("?") || stdout.contains("cargo test"),
-        "dry-run arrow line must be in stdout, not stderr. stdout={stdout:?} stderr={stderr:?}"
+        stdout.contains("-> cargo test"),
+        "dry-run command with exact prefix must be on stdout. stdout={stdout:?}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "dry-run must not output errors to stderr. stderr={stderr:?}"
     );
 }
 
@@ -1718,4 +1734,151 @@ test = "cmd /C \"echo hello & echo world\"""#,
     )
     .unwrap();
     sgl().args(["test", "--cwd"]).arg(dir).assert().success();
+}
+
+#[test]
+fn explain_stdout_and_stderr_routing() {
+    // 1. --explain text: stdout has plan, stderr is empty
+    let out_text = sgl()
+        .args(["--explain", "build", "--cwd"])
+        .arg(fixtures().join("rust"))
+        .output()
+        .unwrap();
+    assert!(out_text.status.success());
+    let stdout_text = String::from_utf8_lossy(&out_text.stdout);
+    let stderr_text = String::from_utf8_lossy(&out_text.stderr);
+    assert!(
+        stdout_text.contains("cargo build"),
+        "stdout must contain plan: {stdout_text}"
+    );
+    assert!(
+        stdout_text.contains("reason:"),
+        "stdout must contain reason: {stdout_text}"
+    );
+    assert!(
+        stderr_text.is_empty(),
+        "stderr must be empty on explain success: {stderr_text}"
+    );
+
+    // 2. --explain --json: stdout has JSON, stderr is empty
+    let out_json = sgl()
+        .args(["--explain", "build", "--json", "--cwd"])
+        .arg(fixtures().join("rust"))
+        .output()
+        .unwrap();
+    assert!(out_json.status.success());
+    let stdout_json = String::from_utf8_lossy(&out_json.stdout);
+    let stderr_json = String::from_utf8_lossy(&out_json.stderr);
+    let v: serde_json::Value = serde_json::from_str(&stdout_json).expect("valid json on stdout");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["verb"], "build");
+    assert!(
+        stderr_json.is_empty(),
+        "stderr must be empty on explain json success: {stderr_json}"
+    );
+
+    // 3. --explain unavailable verb (error): stdout is empty, stderr has error message
+    let out_err = sgl()
+        .args(["--explain", "lint", "--cwd"])
+        .arg(fixtures().join("compose"))
+        .output()
+        .unwrap();
+    assert_eq!(out_err.status.code(), Some(1));
+    let stdout_err = String::from_utf8_lossy(&out_err.stdout);
+    let stderr_err = String::from_utf8_lossy(&out_err.stderr);
+    assert!(
+        stdout_err.is_empty(),
+        "stdout must be empty on explain error: {stdout_err}"
+    );
+    assert!(
+        stderr_err.contains("sgl: no 'lint' command for this project (docker)"),
+        "stderr must contain error: {stderr_err}"
+    );
+}
+
+#[test]
+fn nextjs_fixture_skip_list_only_lists_root_once() {
+    let root = fixtures().join("nextjs");
+
+    // 1. Text output: sgl info lists only root once
+    let out = sgl().args(["info", "--cwd"]).arg(&root).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+    let lines: Vec<&str> = combined.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    // Must contain root name "nextjs-app"
+    assert!(
+        lines.iter().any(|l| l.contains("nextjs-app")),
+        "must list root project: {combined}"
+    );
+    // Must NOT contain internal-next-dev, dist-pkg, or target-pkg
+    assert!(
+        !lines.iter().any(|l| l.contains("internal-next-dev")),
+        ".next/dev/package.json must be skipped: {combined}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("dist-pkg")),
+        "dist/package.json must be skipped: {combined}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("target-pkg")),
+        "target/package.json must be skipped: {combined}"
+    );
+    // Must list root exactly once (not duplicated)
+    let count = lines.iter().filter(|l| l.contains("nextjs-app")).count();
+    assert_eq!(
+        count, 1,
+        "nextjs-app must appear exactly once, got {count}: {lines:?}"
+    );
+
+    // 2. JSON output: sgl info --json lists exactly one project
+    let out_json = sgl()
+        .args(["info", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(out_json.status.success());
+    let stdout_json = String::from_utf8_lossy(&out_json.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout_json).unwrap();
+    let projects = v["projects"].as_array().expect("projects array");
+    assert_eq!(
+        projects.len(),
+        1,
+        "expected exactly 1 project in JSON, got: {stdout_json}"
+    );
+    assert_eq!(projects[0]["name"], "nextjs-app");
+}
+
+#[test]
+fn skip_list_ignores_dist_and_target_package_json() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"root-pkg","scripts":{"build":"next build"}}"#,
+    )
+    .unwrap();
+
+    let dist = root.join("dist");
+    std::fs::create_dir_all(&dist).unwrap();
+    std::fs::write(dist.join("package.json"), r#"{"name":"dist-ignored"}"#).unwrap();
+
+    let target = root.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("package.json"), r#"{"name":"target-ignored"}"#).unwrap();
+
+    let out = sgl()
+        .args(["info", "--json", "--cwd"])
+        .arg(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let projects = v["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1, "must only discover root, got: {stdout}");
+    assert_eq!(projects[0]["name"], "root-pkg");
 }

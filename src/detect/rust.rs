@@ -190,14 +190,13 @@ fn dev_uses_cargo_run_when_cargo_watch_absent() {
     let plan = <RustDetector as super::Detector>::plan(&d, &p, &crate::detect::Verb::Dev).unwrap();
     let cargo_watch_found = which::which("cargo-watch").is_ok();
     if cargo_watch_found {
-        assert!(
-            plan.reason.contains("found")
-                || plan.program == "cargo" && plan.args.contains(&"watch".to_string())
-        );
+        assert_eq!(plan.program, "cargo");
+        assert!(plan.args.contains(&"watch".to_string()));
+        assert_eq!(plan.reason, "cargo watch: cargo-watch found on PATH");
     } else {
         assert_eq!(plan.program, "cargo");
         assert!(plan.args.contains(&"run".to_string()));
         assert!(!plan.args.contains(&"watch".to_string()));
-        assert!(plan.reason.contains("not on PATH") || plan.reason.contains("cargo run"));
+        assert_eq!(plan.reason, "cargo run (cargo-watch not on PATH)");
     }
 }
