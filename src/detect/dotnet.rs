@@ -183,4 +183,3 @@ mod dotnet_tests {
         assert!(plan.is_none(), "multi-csproj should not resolve dev");
     }
 }
-

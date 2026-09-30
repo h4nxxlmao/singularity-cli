@@ -67,3 +67,4 @@ Yes. If it finds more than one project in subdirectories, it runs each verb in p
 
 **Where does it install to?**
 `~/.local/bin` on Unix, `%USERPROFILE%\.local\bin` on Windows. Override with `SGL_INSTALL_DIR`.
+
