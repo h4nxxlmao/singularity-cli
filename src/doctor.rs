@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use owo_colors::OwoColorize;
+
 use crate::detect::{all_detectors, detect_all, ToolRequirement};
 use crate::ui::Ui;
 
@@ -15,10 +17,59 @@ pub struct ToolStatus {
 }
 
 /// Run doctor checks for all detected projects in `dir`.
-pub fn run(dir: &Path, ui: &Ui, json: bool) -> i32 {
-    let mut projects = detect_all(dir);
+pub fn run(dir: &Path, ui: &Ui, json: bool, project_filter: Option<&str>) -> i32 {
+    let subs = crate::monorepo::discover(dir);
+    let mut projects =
+        if subs.len() > 1 || (!subs.is_empty() && crate::monorepo::is_workspace_root(dir)) {
+            subs
+        } else {
+            let top = detect_all(dir);
+            if top.is_empty() {
+                subs
+            } else {
+                top
+            }
+        };
+
+    if let Some(target) = project_filter {
+        let mut valid_names: Vec<String> = projects.iter().map(|p| p.name.clone()).collect();
+        valid_names.sort();
+        valid_names.dedup();
+
+        projects.retain(|p| crate::monorepo::project_matches_filter(p, target, dir));
+        if projects.is_empty() {
+            let valid_str = if valid_names.is_empty() {
+                "none".to_string()
+            } else {
+                valid_names.join(", ")
+            };
+            if json {
+                let val = serde_json::json!({
+                    "schema_version": 1,
+                    "error": format!("sgl: no project named '{target}' found. Valid projects: {valid_str}"),
+                    "tools": [],
+                });
+                println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+            } else {
+                ui.error(&format!(
+                    "sgl: no project named '{target}' found. Valid projects: {valid_str}"
+                ));
+            }
+            return 1;
+        }
+    }
+
     if projects.is_empty() {
-        projects = crate::monorepo::discover(dir);
+        if json {
+            let val = serde_json::json!({
+                "schema_version": 1,
+                "tools": [],
+            });
+            println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+        } else {
+            ui.warn("no projects detected in this directory");
+        }
+        return 0;
     }
 
     let detectors = all_detectors();
@@ -41,13 +92,6 @@ pub fn run(dir: &Path, ui: &Ui, json: bool) -> i32 {
                 break;
             }
         }
-    }
-
-    if projects.is_empty() {
-        if !json {
-            ui.warn("no projects detected in this directory");
-        }
-        return 0;
     }
 
     if json {
@@ -110,6 +154,14 @@ fn get_version(program_path: &Path) -> Option<String> {
             use std::os::windows::process::CommandExt;
             cmd.raw_arg(&full_cmd);
             cmd.output().ok()?
+        } else if crate::exec::is_windows_ps1(program_path) {
+            let ps = crate::exec::get_powershell_executable();
+            std::process::Command::new(ps)
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(program_path)
+                .arg("--version")
+                .output()
+                .ok()?
         } else {
             std::process::Command::new(program_path)
                 .arg("--version")
@@ -206,10 +258,14 @@ fn print_table(rows: &[ToolStatus], ui: &Ui) {
             "{:<w_tool$}  {:<w_found$}  {:<w_req$}  {:<8} {}",
             row.tool, found, row.required_version, row.status, fix
         );
-        match row.status {
-            "ok" => ui.success(&line),
-            "missing" | "version mismatch" => ui.error(&line),
-            _ => eprintln!("{line}"),
+        if ui.color {
+            match row.status {
+                "ok" => eprintln!("{}", line.green()),
+                "missing" | "version mismatch" => eprintln!("{}", line.red()),
+                _ => eprintln!("{line}"),
+            }
+        } else {
+            eprintln!("{line}");
         }
     }
 }

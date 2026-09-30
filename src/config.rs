@@ -90,19 +90,7 @@ pub fn has_override(config: &Config, verb: &Verb) -> bool {
 
 /// Build a CommandPlan from a shell command string and the config env.
 fn shell_plan(cmd: &str, cwd: &Path, config: &Config, reason: &str) -> CommandPlan {
-    // Split into program + args (simple whitespace split; no shell expansion)
-    let mut parts = cmd.split_whitespace();
-    let program = parts.next().unwrap_or("sh").to_string();
-    let args: Vec<String> = parts.map(|s| s.to_string()).collect();
-
-    CommandPlan {
-        program,
-        args,
-        cwd: cwd.to_path_buf(),
-        env: config.env.clone(),
-        reason: reason.to_string(),
-        fallback: None,
-    }
+    CommandPlan::shell(cmd, cwd.to_path_buf(), config.env.clone(), reason)
 }
 
 #[cfg(test)]
@@ -159,8 +147,7 @@ DATABASE_URL = "postgres://localhost/dev"
         let (config, _) = load(dir).unwrap().unwrap();
         let plans = override_for_verb(&config, &Verb::Test, dir).unwrap();
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].program, "pytest");
-        assert!(plans[0].args.contains(&"-x".to_string()));
+        assert_eq!(plans[0].raw_shell.as_deref(), Some("pytest -x"));
     }
 
     #[test]
@@ -177,8 +164,14 @@ dev = ["docker compose up -d db", "uvicorn app:app --reload"]
         let (config, _) = load(dir).unwrap().unwrap();
         let plans = override_for_verb(&config, &Verb::Dev, dir).unwrap();
         assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].program, "docker");
-        assert_eq!(plans[1].program, "uvicorn");
+        assert_eq!(
+            plans[0].raw_shell.as_deref(),
+            Some("docker compose up -d db")
+        );
+        assert_eq!(
+            plans[1].raw_shell.as_deref(),
+            Some("uvicorn app:app --reload")
+        );
     }
 
     #[test]

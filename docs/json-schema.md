@@ -118,6 +118,10 @@ Reports required tools, installed versions, and resolution statuses.
       "type": "integer",
       "description": "Schema version (currently 1)"
     },
+    "error": {
+      "type": "string",
+      "description": "Error message when a requested filter (e.g. --project) could not be matched"
+    },
     "tools": {
       "type": "array",
       "items": {
@@ -197,6 +201,10 @@ Resolves the command plan for `<verb>` and returns exact command details without
     "verb": {
       "type": "string",
       "description": "The verb requested"
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message if the requested verb is not configured or detected"
     },
     "plans": {
       "type": "array",

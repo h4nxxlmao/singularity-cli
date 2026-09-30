@@ -476,6 +476,102 @@ fn windows_cmd_shim_execution() {
     sgl().args(["build", "--cwd"]).arg(dir).assert().success();
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_ps1_and_cmd_on_path_with_spaces() {
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+
+    // 1. Temp dir with ONLY fake.ps1
+    let tmp_bin_ps1 = tempfile::TempDir::new().unwrap();
+    let ps1_file = tmp_bin_ps1.path().join("fake.ps1");
+    std::fs::write(&ps1_file, "Write-Output 'FAKE_PS1_OK'\r\nexit 0\r\n").unwrap();
+
+    let tmp_proj_ps1 = tempfile::TempDir::new().unwrap();
+    let spaced_cwd_ps1 = tmp_proj_ps1
+        .path()
+        .join("dir with spaces")
+        .join("my proj ps1");
+    std::fs::create_dir_all(&spaced_cwd_ps1).unwrap();
+    std::fs::write(
+        spaced_cwd_ps1.join("singularity.toml"),
+        "[commands]\ntest = \"fake\"\n",
+    )
+    .unwrap();
+
+    let mut path_with_ps1 = tmp_bin_ps1.path().as_os_str().to_os_string();
+    path_with_ps1.push(";");
+    path_with_ps1.push(&old_path);
+
+    sgl()
+        .env("PATH", &path_with_ps1)
+        .args(["test", "--cwd"])
+        .arg(&spaced_cwd_ps1)
+        .assert()
+        .success();
+
+    // 2. Temp dir with ONLY fake.cmd
+    let tmp_bin_cmd = tempfile::TempDir::new().unwrap();
+    let cmd_file = tmp_bin_cmd.path().join("fake.cmd");
+    std::fs::write(&cmd_file, "@echo off\r\necho FAKE_CMD_OK\r\nexit 0\r\n").unwrap();
+
+    let tmp_proj_cmd = tempfile::TempDir::new().unwrap();
+    let spaced_cwd_cmd = tmp_proj_cmd
+        .path()
+        .join("dir with spaces")
+        .join("my proj cmd");
+    std::fs::create_dir_all(&spaced_cwd_cmd).unwrap();
+    std::fs::write(
+        spaced_cwd_cmd.join("singularity.toml"),
+        "[commands]\nbuild = \"fake\"\n",
+    )
+    .unwrap();
+
+    let mut path_with_cmd = tmp_bin_cmd.path().as_os_str().to_os_string();
+    path_with_cmd.push(";");
+    path_with_cmd.push(&old_path);
+
+    sgl()
+        .env("PATH", &path_with_cmd)
+        .args(["build", "--cwd"])
+        .arg(&spaced_cwd_cmd)
+        .assert()
+        .success();
+
+    // 3. Resolution order: cmd preferred over ps1 when both exist next to each other
+    let tmp_bin_both = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        tmp_bin_both.path().join("tool.cmd"),
+        "@echo off\r\necho RUNNING_CMD\r\nexit 0\r\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp_bin_both.path().join("tool.ps1"),
+        "Write-Output 'RUNNING_PS1'\r\nexit 0\r\n",
+    )
+    .unwrap();
+
+    let tmp_proj_both = tempfile::TempDir::new().unwrap();
+    let cwd_both = tmp_proj_both.path().join("proj");
+    std::fs::create_dir_all(&cwd_both).unwrap();
+    std::fs::write(
+        cwd_both.join("singularity.toml"),
+        "[commands]\nrun = \"tool\"\n",
+    )
+    .unwrap();
+
+    let mut path_with_both = tmp_bin_both.path().as_os_str().to_os_string();
+    path_with_both.push(";");
+    path_with_both.push(&old_path);
+
+    sgl()
+        .env("PATH", &path_with_both)
+        .args(["run", "run", "--cwd"])
+        .arg(&cwd_both)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RUNNING_CMD"));
+}
+
 #[test]
 fn cwd_containing_spaces_works() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -651,11 +747,44 @@ fn rust_workspace_discovery() {
 
 #[test]
 fn monorepo_project_filter() {
+    let root = fixtures().join("monorepo-mixed");
+
+    // 1. sgl test --project web
     sgl()
         .args(["--dry-run", "test", "--project", "web", "--cwd"])
-        .arg(fixtures().join("monorepo-mixed"))
+        .arg(&root)
         .assert()
         .success();
+
+    // 2. sgl --project web test (flag before verb)
+    sgl()
+        .args(["--dry-run", "--project", "web", "test", "--cwd"])
+        .arg(&root)
+        .assert()
+        .success();
+
+    // 3. Match by relative path: ./web
+    sgl()
+        .args(["--dry-run", "test", "--project", "./web", "--cwd"])
+        .arg(&root)
+        .assert()
+        .success();
+
+    // 4. Unknown project lists valid project names
+    sgl()
+        .args([
+            "--dry-run",
+            "test",
+            "--project",
+            "nonexistent_proj",
+            "--cwd",
+        ])
+        .arg(&root)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("nonexistent_proj"))
+        .stderr(predicate::str::contains("api"))
+        .stderr(predicate::str::contains("web"));
 }
 
 #[test]
@@ -734,6 +863,100 @@ fn monorepo_changed_filtering() {
 }
 
 #[test]
+fn monorepo_flags_serial_changed_and_fail_fast() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
+
+    // 1. Initialize git repo
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    let proj_a = root.join("proj_a");
+    std::fs::create_dir_all(&proj_a).unwrap();
+    std::fs::write(
+        proj_a.join("package.json"),
+        r#"{"name":"proj_a","scripts":{"test":"node -e \"console.log('out_a')\""}}"#,
+    )
+    .unwrap();
+
+    let proj_b = root.join("proj_b");
+    std::fs::create_dir_all(&proj_b).unwrap();
+    std::fs::write(
+        proj_b.join("package.json"),
+        r#"{"name":"proj_b","scripts":{"test":"node -e \"console.log('out_b')\""}}"#,
+    )
+    .unwrap();
+
+    // Commit both
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    // Test 1: Real execution with --serial
+    sgl()
+        .args(["test", "--serial", "--cwd"])
+        .arg(root)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[proj_a] out_a"))
+        .stdout(predicate::str::contains("[proj_b] out_b"))
+        .stderr(predicate::str::contains("proj_a"))
+        .stderr(predicate::str::contains("proj_b"))
+        .stderr(predicate::str::contains("success"));
+
+    // Test 2: Modify only proj_a, then run with --changed
+    std::fs::write(
+        proj_a.join("package.json"),
+        r#"{"name":"proj_a","scripts":{"test":"node -e \"console.log('out_a_modified')\""}}"#,
+    )
+    .unwrap();
+
+    sgl()
+        .args(["test", "--changed", "--cwd"])
+        .arg(root)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[proj_a] out_a_modified"))
+        .stdout(predicate::str::contains("out_b").not());
+
+    // Test 3: --fail-fast stops on first failure
+    std::fs::write(
+        proj_a.join("package.json"),
+        r#"{"name":"proj_a","scripts":{"test":"node -e \"process.exit(1)\""}}"#,
+    )
+    .unwrap();
+
+    sgl()
+        .args(["test", "--serial", "--fail-fast", "--cwd"])
+        .arg(root)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("proj_a"))
+        .stderr(predicate::str::contains("failed"))
+        .stderr(predicate::str::contains("skipped"));
+}
+
+#[test]
 fn explain_json_schema_version() {
     let out = sgl()
         .args(["--explain", "test", "--json", "--cwd"])
@@ -760,4 +983,450 @@ fn doctor_json_schema_version() {
         serde_json::from_str(&stdout).expect("expected valid JSON from sgl doctor --json");
     assert_eq!(v["schema_version"], 1);
     assert!(v["tools"].as_array().is_some());
+}
+
+#[test]
+fn doctor_json_never_prints_zero_bytes() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let empty_dir = tmp.path();
+
+    let out = sgl()
+        .args(["doctor", "--json", "--cwd"])
+        .arg(empty_dir)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "doctor --json printed 0 bytes on empty directory"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("expected valid JSON from sgl doctor --json");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["tools"].as_array().map(|a| a.len()), Some(0));
+}
+
+#[test]
+fn doctor_monorepo_discovery_and_project_filter() {
+    let root = fixtures().join("monorepo-mixed");
+
+    // Monorepo doctor discovers tools across subprojects and deduplicates
+    let out_all = sgl()
+        .args(["doctor", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let stdout_all = String::from_utf8_lossy(&out_all.stdout);
+    let v_all: serde_json::Value = serde_json::from_str(&stdout_all).unwrap();
+    let tools_all: Vec<&str> = v_all["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tool"].as_str().unwrap())
+        .collect();
+    assert!(tools_all.contains(&"node") || tools_all.contains(&"npm"));
+    assert!(tools_all.contains(&"cargo"));
+
+    // sgl doctor --project web only checks web's tools
+    let out_web = sgl()
+        .args(["doctor", "--project", "web", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let stdout_web = String::from_utf8_lossy(&out_web.stdout);
+    let v_web: serde_json::Value = serde_json::from_str(&stdout_web).unwrap();
+    let tools_web: Vec<&str> = v_web["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tool"].as_str().unwrap())
+        .collect();
+    assert!(tools_web.contains(&"node") || tools_web.contains(&"npm"));
+    assert!(!tools_web.contains(&"cargo"));
+
+    // sgl doctor --project api only checks api's tools
+    let out_api = sgl()
+        .args(["doctor", "--project", "api", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let stdout_api = String::from_utf8_lossy(&out_api.stdout);
+    let v_api: serde_json::Value = serde_json::from_str(&stdout_api).unwrap();
+    let tools_api: Vec<&str> = v_api["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tool"].as_str().unwrap())
+        .collect();
+    assert!(tools_api.contains(&"cargo"));
+    assert!(!tools_api.contains(&"node") && !tools_api.contains(&"npm"));
+}
+
+#[test]
+fn singularity_toml_shell_command_quoting_with_spaces_and_special_chars() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let spaced_cwd = tmp.path().join("dir with spaces").join("my project");
+    std::fs::create_dir_all(&spaced_cwd).unwrap();
+
+    let toml_content = r#"[commands]
+test = "node -e \"console.log('hi & %')\""
+build = "node -e \"console.log(process.argv[1])\" \"double 'quote' & %VAR%\""
+"#;
+    std::fs::write(spaced_cwd.join("singularity.toml"), toml_content).unwrap();
+
+    let assert_test = sgl()
+        .args(["test", "--cwd"])
+        .arg(&spaced_cwd)
+        .assert()
+        .success();
+
+    assert_test.stdout(predicate::str::contains("hi & %"));
+
+    let assert_build = sgl()
+        .args(["build", "--cwd"])
+        .arg(&spaced_cwd)
+        .assert()
+        .success();
+
+    assert_build.stdout(predicate::str::contains("double 'quote' & %VAR%"));
+}
+
+#[test]
+fn quiet_flag_hides_banner_but_prints_payloads() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "quiet-pkg",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node -e 'console.log(1)'"
+  }
+}"#,
+    )
+    .unwrap();
+
+    // 1. info --quiet must print project payload, but not banner or verb list
+    let out_info = sgl()
+        .args(["info", "--quiet", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let combined_info = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_info.stdout),
+        String::from_utf8_lossy(&out_info.stderr)
+    );
+    assert!(
+        combined_info.contains("quiet-pkg"),
+        "info --quiet should output project name, got: {combined_info}"
+    );
+    assert!(
+        combined_info.contains("[node]"),
+        "info --quiet should output project kind"
+    );
+    assert!(!combined_info.contains("___(_)"), "banner must be hidden");
+    assert!(
+        !combined_info.contains("Available commands:"),
+        "verb list must be hidden"
+    );
+
+    // 2. doctor --quiet must print doctor table
+    let out_doc = sgl()
+        .args(["doctor", "--quiet", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let combined_doc = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_doc.stdout),
+        String::from_utf8_lossy(&out_doc.stderr)
+    );
+    assert!(
+        combined_doc.contains("node"),
+        "doctor --quiet should print tool name"
+    );
+    assert!(
+        combined_doc.contains("status"),
+        "doctor --quiet should print table header"
+    );
+
+    // 3. --explain --quiet must print plan details
+    let out_exp = sgl()
+        .args(["--explain", "test", "--quiet", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let combined_exp = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_exp.stdout),
+        String::from_utf8_lossy(&out_exp.stderr)
+    );
+    assert!(
+        combined_exp.contains("npm"),
+        "--explain --quiet should show program"
+    );
+    assert!(
+        combined_exp.contains("reason:"),
+        "--explain --quiet should show reason"
+    );
+
+    // 4. dry-run --quiet must print the command line that would run
+    let out_dry = sgl()
+        .args(["test", "--dry-run", "--quiet", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let combined_dry = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_dry.stdout),
+        String::from_utf8_lossy(&out_dry.stderr)
+    );
+    assert!(
+        combined_dry.contains("npm"),
+        "dry-run --quiet should print the planned command, got: {combined_dry}"
+    );
+
+    // 5. error output must still print with --quiet
+    let out_err = sgl()
+        .args(["lint", "--quiet", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let stderr_err = String::from_utf8_lossy(&out_err.stderr);
+    assert!(
+        stderr_err.contains("sgl: no 'lint' command for this project"),
+        "errors must still print with --quiet, got: {stderr_err}"
+    );
+}
+
+#[test]
+fn schema_version_present_in_all_json_commands() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name": "json-test-pkg", "scripts": {"build": "node -e 'console.log(1)'"}}"#,
+    )
+    .unwrap();
+
+    // 1. info --json
+    let out_info = sgl()
+        .args(["info", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(out_info.status.success());
+    let v_info: serde_json::Value = serde_json::from_slice(&out_info.stdout).unwrap();
+    assert_eq!(v_info["schema_version"], 1);
+
+    // 2. doctor --json
+    let out_doc = sgl()
+        .args(["doctor", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    let v_doc: serde_json::Value = serde_json::from_slice(&out_doc.stdout).unwrap();
+    assert_eq!(v_doc["schema_version"], 1);
+
+    // 3. --explain <verb> --json (success)
+    let out_exp = sgl()
+        .args(["--explain", "build", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(out_exp.status.success());
+    let v_exp: serde_json::Value = serde_json::from_slice(&out_exp.stdout).unwrap();
+    assert_eq!(v_exp["schema_version"], 1);
+
+    // 4. --explain <verb> --json (unavailable command)
+    let out_exp_unavail = sgl()
+        .args(["--explain", "lint", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert_eq!(out_exp_unavail.status.code(), Some(1));
+    let v_exp_unavail: serde_json::Value = serde_json::from_slice(&out_exp_unavail.stdout).unwrap();
+    assert_eq!(v_exp_unavail["schema_version"], 1);
+    assert!(v_exp_unavail["error"].as_str().is_some());
+
+    // 5. doctor --project <nonexistent> --json
+    let out_doc_unavail = sgl()
+        .args(["doctor", "--project", "nonexistent", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert_eq!(out_doc_unavail.status.code(), Some(1));
+    let v_doc_unavail: serde_json::Value = serde_json::from_slice(&out_doc_unavail.stdout).unwrap();
+    assert_eq!(v_doc_unavail["schema_version"], 1);
+    assert!(v_doc_unavail["error"].as_str().is_some());
+}
+
+#[test]
+fn npm_run_and_extra_args_passthrough() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name": "npm-args-pkg", "scripts": {"test": "jest", "build": "esbuild"}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("package-lock.json"), "{}").unwrap();
+
+    // 1. sgl run test -- --watch
+    let out = sgl()
+        .args(["--dry-run", "run", "test", "--cwd"])
+        .arg(&root)
+        .args(["--", "--watch"])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("npm run test -- --watch"),
+        "expected 'npm run test -- --watch', got: {combined}"
+    );
+
+    // 2. sgl test -- --watch
+    let out_test = sgl()
+        .args(["--dry-run", "test", "--cwd"])
+        .arg(&root)
+        .args(["--", "--watch"])
+        .output()
+        .unwrap();
+    let combined_test = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_test.stdout),
+        String::from_utf8_lossy(&out_test.stderr)
+    );
+    assert!(
+        combined_test.contains("npm run test -- --watch"),
+        "expected 'npm run test -- --watch', got: {combined_test}"
+    );
+}
+
+#[test]
+fn unavailable_message_format_consistent_everywhere() {
+    // 1. dotnet dev (unsupported verb for dotnet)
+    let out_dotnet = sgl()
+        .args(["dev", "--cwd"])
+        .arg(fixtures().join("dotnet"))
+        .output()
+        .unwrap();
+    assert_eq!(out_dotnet.status.code(), Some(1));
+    let stderr_dotnet = String::from_utf8_lossy(&out_dotnet.stderr);
+    assert!(
+        stderr_dotnet.contains("sgl: no 'dev' command for this project (dotnet)"),
+        "expected header, got: {stderr_dotnet}"
+    );
+    assert!(stderr_dotnet.contains("path:"));
+    assert!(stderr_dotnet.contains("reason: verb 'dev' is not supported for dotnet projects"));
+    assert!(stderr_dotnet.contains("available: setup, build, test, fmt, run"));
+    assert!(stderr_dotnet.contains("hint: define 'dev' in singularity.toml under [commands]"));
+
+    // 2. Directory with no project detected
+    let tmp = tempfile::TempDir::new().unwrap();
+    let empty_dir = tmp.path();
+    let out_empty = sgl()
+        .args(["dev", "--cwd"])
+        .arg(empty_dir)
+        .output()
+        .unwrap();
+    assert_eq!(out_empty.status.code(), Some(1));
+    let stderr_empty = String::from_utf8_lossy(&out_empty.stderr);
+    assert!(
+        stderr_empty.contains("sgl: no 'dev' command for this project (no project detected)"),
+        "expected header for empty dir, got: {stderr_empty}"
+    );
+    assert!(stderr_empty.contains("path:"));
+    assert!(stderr_empty.contains("reason: no project detected in this directory"));
+    assert!(stderr_empty.contains(
+        "available: setup, dev, test, build, lint, fmt, run <script>, doctor, info, init"
+    ));
+    assert!(stderr_empty.contains("hint: run 'sgl init' to create a singularity.toml"));
+}
+
+#[test]
+fn justfile_recipe_parsing_and_execution() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let justfile_content = r#"# A test justfile
+build:
+    cargo build
+
+test:
+    cargo test
+
+custom-task:
+    echo "custom task"
+"#;
+    std::fs::write(root.join("justfile"), justfile_content).unwrap();
+
+    // 1. explain test -> maps to just test
+    let out_test = sgl()
+        .args(["--explain", "test", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(out_test.status.success());
+    let stderr_test = String::from_utf8_lossy(&out_test.stderr);
+    assert!(
+        stderr_test.contains("just test"),
+        "expected 'just test', got: {stderr_test}"
+    );
+
+    // 2. explain build -> maps to just build
+    let out_build = sgl()
+        .args(["--explain", "build", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(out_build.status.success());
+    let stderr_build = String::from_utf8_lossy(&out_build.stderr);
+    assert!(
+        stderr_build.contains("just build"),
+        "expected 'just build', got: {stderr_build}"
+    );
+
+    // 3. run custom-task -> dry-run executes just custom-task
+    let out_custom = sgl()
+        .args(["--dry-run", "run", "custom-task", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(out_custom.status.success());
+    let combined_custom = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_custom.stdout),
+        String::from_utf8_lossy(&out_custom.stderr)
+    );
+    assert!(
+        combined_custom.contains("just custom-task"),
+        "expected 'just custom-task', got: {combined_custom}"
+    );
+
+    // 4. explain dev -> unavailable with structured message listing available recipes
+    let out_dev = sgl()
+        .args(["--explain", "dev", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert_eq!(out_dev.status.code(), Some(1));
+    let stderr_dev = String::from_utf8_lossy(&out_dev.stderr);
+    assert!(
+        stderr_dev.contains("sgl: no 'dev' command for this project (just)"),
+        "got: {stderr_dev}"
+    );
+    assert!(stderr_dev.contains("path:"));
+    assert!(stderr_dev.contains("reason: no \"dev\" recipe in justfile"));
+    assert!(stderr_dev.contains("available: build, custom-task, test"));
+    assert!(stderr_dev.contains(
+        "hint: add a \"dev\" recipe to justfile, or define it in singularity.toml under [commands]"
+    ));
 }

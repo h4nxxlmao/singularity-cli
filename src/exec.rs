@@ -12,46 +12,130 @@ use owo_colors::OwoColorize;
 /// Returns the child's exit code.
 pub async fn run(plan: &CommandPlan, ui: &Ui, dry_run: bool) -> Result<i32> {
     let cmd_display = format_cmd(plan);
-    ui.print_cmd(&cmd_display);
-
     if dry_run {
+        if ui.color {
+            eprintln!("  {}", format!("→ {cmd_display}").cyan());
+        } else {
+            eprintln!("  → {cmd_display}");
+        }
         return Ok(0);
     }
 
-    let resolved_path = match resolve_program(&plan.program, &plan.cwd) {
-        Some(p) => p,
-        None => {
+    ui.print_cmd(&cmd_display);
+
+    if let Some(raw_cmd) = &plan.raw_shell {
+        let first_token = raw_cmd.split_whitespace().next().unwrap_or("");
+        let clean_first = first_token
+            .trim_start_matches("./")
+            .trim_start_matches(".\\");
+        let is_builtin = is_shell_builtin(clean_first);
+        let resolved = if is_builtin {
+            None
+        } else {
+            resolve_program(first_token, &plan.cwd)
+        };
+
+        if !is_builtin && resolved.is_none() {
             if let Some(fallback) = &plan.fallback {
-                ui.warn(&format!("  '{}' not found, trying fallback", plan.program));
+                ui.warn(&format!("  '{}' not found, trying fallback", first_token));
                 return Box::pin(run(fallback, ui, dry_run)).await;
             }
-            let (tool_name, os_hint) = get_os_install_hint(&plan.program);
+            let (tool_name, os_hint) = get_os_install_hint(first_token);
             if !os_hint.is_empty() {
                 ui.error(&format!(
                     "sgl: '{}' not found on PATH (needed for: {}). Install {}: {}",
-                    plan.program, cmd_display, tool_name, os_hint
+                    first_token, cmd_display, tool_name, os_hint
                 ));
             } else {
                 ui.error(&format!(
                     "sgl: '{}' not found on PATH (needed for: {}).",
-                    plan.program, cmd_display
+                    first_token, cmd_display
                 ));
             }
             return Ok(127);
         }
-    };
 
-    let mut cmd = build_command(plan, &resolved_path);
-    let mut child = cmd.spawn()?;
-
-    tokio::select! {
-        status = child.wait() => {
-            let status = status?;
-            Ok(status.code().unwrap_or(1))
+        #[cfg(windows)]
+        if let Some(ref res_path) = resolved {
+            if is_windows_ps1(res_path) {
+                let ps = get_powershell_executable();
+                let mut c = tokio::process::Command::new(ps);
+                c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+                c.arg(res_path);
+                let rest = raw_cmd[first_token.len()..].trim();
+                if !rest.is_empty() {
+                    c.raw_arg(format!(" {}", rest));
+                }
+                c.current_dir(&plan.cwd);
+                c.stdin(Stdio::inherit());
+                c.stdout(Stdio::inherit());
+                c.stderr(Stdio::inherit());
+                for (k, v) in &plan.env {
+                    c.env(k, v);
+                }
+                let mut child = c.spawn()?;
+                tokio::select! {
+                    status = child.wait() => {
+                        let status = status?;
+                        return Ok(status.code().unwrap_or(1));
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        let _ = child.kill().await;
+                        return Ok(130);
+                    }
+                }
+            }
         }
-        _ = tokio::signal::ctrl_c() => {
-            let _ = child.kill().await;
-            Ok(130)
+
+        let mut cmd = build_shell_command(raw_cmd, plan);
+        let mut child = cmd.spawn()?;
+
+        tokio::select! {
+            status = child.wait() => {
+                let status = status?;
+                Ok(status.code().unwrap_or(1))
+            }
+            _ = tokio::signal::ctrl_c() => {
+                let _ = child.kill().await;
+                Ok(130)
+            }
+        }
+    } else {
+        let resolved_path = match resolve_program(&plan.program, &plan.cwd) {
+            Some(p) => p,
+            None => {
+                if let Some(fallback) = &plan.fallback {
+                    ui.warn(&format!("  '{}' not found, trying fallback", plan.program));
+                    return Box::pin(run(fallback, ui, dry_run)).await;
+                }
+                let (tool_name, os_hint) = get_os_install_hint(&plan.program);
+                if !os_hint.is_empty() {
+                    ui.error(&format!(
+                        "sgl: '{}' not found on PATH (needed for: {}). Install {}: {}",
+                        plan.program, cmd_display, tool_name, os_hint
+                    ));
+                } else {
+                    ui.error(&format!(
+                        "sgl: '{}' not found on PATH (needed for: {}).",
+                        plan.program, cmd_display
+                    ));
+                }
+                return Ok(127);
+            }
+        };
+
+        let mut cmd = build_command(plan, &resolved_path);
+        let mut child = cmd.spawn()?;
+
+        tokio::select! {
+            status = child.wait() => {
+                let status = status?;
+                Ok(status.code().unwrap_or(1))
+            }
+            _ = tokio::signal::ctrl_c() => {
+                let _ = child.kill().await;
+                Ok(130)
+            }
         }
     }
 }
@@ -67,40 +151,70 @@ pub async fn run_sequence(plans: &[CommandPlan], ui: &Ui, dry_run: bool) -> Resu
     Ok(0)
 }
 
+#[cfg(windows)]
+pub fn refine_resolved_path(path: PathBuf) -> PathBuf {
+    if let Some(parent) = path.parent() {
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            for ext in &["exe", "cmd", "bat"] {
+                let candidate = parent.join(format!("{stem}.{ext}"));
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    path
+}
+
 /// Resolve a program name to an executable path.
 /// Handles relative paths in cwd, Windows .cmd/.bat extensions, and PATH lookup.
 pub fn resolve_program(program: &str, cwd: &Path) -> Option<PathBuf> {
     let clean = program.trim_start_matches("./").trim_start_matches(".\\");
 
-    // 1. Direct file in cwd
-    let in_cwd = cwd.join(clean);
-    if in_cwd.is_file() {
-        return Some(in_cwd);
-    }
-
     #[cfg(windows)]
     {
+        // 1. Direct file or extensions in cwd
+        let in_cwd = cwd.join(clean);
+        if in_cwd.is_file() {
+            return Some(refine_resolved_path(in_cwd));
+        }
+
         // Check for gradlew.bat, npm.cmd, etc. in cwd
-        for ext in &["bat", "cmd", "exe"] {
+        for ext in &["exe", "cmd", "bat", "ps1"] {
             let p = cwd.join(format!("{clean}.{ext}"));
             if p.is_file() {
-                return Some(p);
+                return Some(refine_resolved_path(p));
             }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let in_cwd = cwd.join(clean);
+        if in_cwd.is_file() {
+            return Some(in_cwd);
         }
     }
 
     // 2. PATH resolution via which
     if let Ok(path) = which::which(program) {
-        return Some(path);
+        #[cfg(windows)]
+        {
+            return Some(refine_resolved_path(path));
+        }
+        #[cfg(not(windows))]
+        {
+            return Some(path);
+        }
     }
 
     #[cfg(windows)]
     {
-        // On Windows, try explicit cmd/bat extensions if which bare name did not resolve
-        for ext in &["cmd", "bat", "exe", "ps1"] {
+        // On Windows, try explicit extensions if which bare name did not resolve
+        for ext in &["exe", "cmd", "bat", "ps1"] {
             let with_ext = format!("{program}.{ext}");
             if let Ok(path) = which::which(&with_ext) {
-                return Some(path);
+                return Some(refine_resolved_path(path));
             }
         }
     }
@@ -288,6 +402,9 @@ pub fn get_install_hint(tool: &str) -> String {
 }
 
 pub fn format_cmd(plan: &CommandPlan) -> String {
+    if let Some(raw) = &plan.raw_shell {
+        return raw.clone();
+    }
     if plan.args.is_empty() {
         plan.program.clone()
     } else {
@@ -304,6 +421,28 @@ pub fn is_windows_batch(path: &Path) -> bool {
     }
     let _ = path;
     false
+}
+
+pub fn is_windows_ps1(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            return ext.eq_ignore_ascii_case("ps1");
+        }
+    }
+    let _ = path;
+    false
+}
+
+#[cfg(windows)]
+pub fn get_powershell_executable() -> &'static str {
+    if which::which("powershell").is_ok() {
+        "powershell"
+    } else if which::which("pwsh").is_ok() {
+        "pwsh"
+    } else {
+        "powershell"
+    }
 }
 
 #[cfg(windows)]
@@ -347,9 +486,99 @@ pub fn build_command(plan: &CommandPlan, program_path: &Path) -> tokio::process:
             c.args(&plan.args);
             c
         }
+    } else if is_windows_ps1(program_path) {
+        #[cfg(windows)]
+        {
+            let ps = get_powershell_executable();
+            let mut c = tokio::process::Command::new(ps);
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+            c.arg(program_path);
+            c.args(&plan.args);
+            c
+        }
+        #[cfg(not(windows))]
+        {
+            let mut c = tokio::process::Command::new(program_path);
+            c.args(&plan.args);
+            c
+        }
     } else {
         let mut c = tokio::process::Command::new(program_path);
         c.args(&plan.args);
+        c
+    };
+
+    cmd.current_dir(&plan.cwd);
+    cmd.stdin(Stdio::inherit());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    for (k, v) in &plan.env {
+        cmd.env(k, v);
+    }
+
+    cmd
+}
+
+pub fn is_shell_builtin(cmd: &str) -> bool {
+    let lower = cmd.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "echo"
+            | "cd"
+            | "dir"
+            | "copy"
+            | "del"
+            | "erase"
+            | "mkdir"
+            | "md"
+            | "rmdir"
+            | "rd"
+            | "type"
+            | "set"
+            | "cls"
+            | "exit"
+            | "rem"
+            | "ren"
+            | "rename"
+            | "move"
+            | "start"
+            | "call"
+            | "pwd"
+            | "export"
+            | "source"
+            | "eval"
+            | "exec"
+            | "read"
+            | "true"
+            | "false"
+            | "test"
+    )
+}
+
+pub fn build_shell_command(raw_cmd: &str, plan: &CommandPlan) -> tokio::process::Command {
+    #[cfg(windows)]
+    let raw_to_run = if let Some(stripped) = raw_cmd.strip_prefix("./") {
+        format!(".\\{stripped}")
+    } else {
+        raw_cmd.to_string()
+    };
+    #[cfg(not(windows))]
+    let raw_to_run = raw_cmd.to_string();
+
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C");
+        c.raw_arg(format!("\"{}\"", raw_to_run));
+        c
+    };
+
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c");
+        c.arg(raw_to_run);
         c
     };
 

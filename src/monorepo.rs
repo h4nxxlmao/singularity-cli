@@ -11,6 +11,7 @@ use std::time::Instant;
 use crate::config::Config;
 use crate::detect::{all_detectors, CommandPlan, Project, Verb};
 use crate::ui::Ui;
+use owo_colors::OwoColorize;
 
 /// Options for monorepo execution.
 #[derive(Debug, Clone)]
@@ -120,6 +121,35 @@ pub fn is_workspace_root(root: &Path) -> bool {
     false
 }
 
+pub fn project_matches_filter(p: &Project, target: &str, root: &Path) -> bool {
+    if p.name == target || p.name.eq_ignore_ascii_case(target) {
+        return true;
+    }
+
+    let target_clean = target
+        .trim_start_matches("./")
+        .trim_start_matches(".\\")
+        .trim_end_matches('/')
+        .trim_end_matches('\\');
+
+    if let Ok(rel) = p.root.strip_prefix(root) {
+        let rel_norm = rel.to_string_lossy().replace('\\', "/");
+        let target_norm = target_clean.replace('\\', "/");
+        if rel_norm == target_norm || rel_norm.eq_ignore_ascii_case(&target_norm) {
+            return true;
+        }
+    }
+
+    let target_path = root.join(target_clean);
+    let p_norm = crate::normalize_path(&p.root);
+    let t_norm = crate::normalize_path(&target_path);
+    if p_norm == t_norm {
+        return true;
+    }
+
+    false
+}
+
 /// Run a verb across all matching projects in a monorepo.
 pub async fn run_monorepo(
     root: &Path,
@@ -136,9 +166,20 @@ pub async fn run_monorepo(
 
     // 1. Filter by --project <NAME>
     if let Some(target) = &opts.project_filter {
-        projects.retain(|p| &p.name == target);
+        let mut valid_names: Vec<String> = projects.iter().map(|p| p.name.clone()).collect();
+        valid_names.sort();
+        valid_names.dedup();
+
+        projects.retain(|p| project_matches_filter(p, target, root));
         if projects.is_empty() {
-            ui.error(&format!("sgl: no project named '{target}' found"));
+            let valid_str = if valid_names.is_empty() {
+                "none".to_string()
+            } else {
+                valid_names.join(", ")
+            };
+            ui.error(&format!(
+                "sgl: no project named '{target}' found. Valid projects: {valid_str}"
+            ));
             return Ok(1);
         }
     }
@@ -147,7 +188,7 @@ pub async fn run_monorepo(
     if opts.changed {
         let repo_root = crate::git::repo_root(root).unwrap_or_else(|| root.to_path_buf());
         let changed_files = crate::git::changed_files(&repo_root, None);
-        projects = crate::git::filter_changed_projects(projects, &changed_files);
+        projects = crate::git::filter_changed_projects(projects, &changed_files, &repo_root);
         if projects.is_empty() {
             ui.warn("no changed projects found");
             return Ok(0);
@@ -183,6 +224,7 @@ pub async fn run_monorepo(
         let verb = opts.verb.clone();
         let extra_args = opts.extra_args.clone();
         let dry_run = opts.dry_run;
+        let quiet = ui.quiet;
         let fail_fast = opts.fail_fast;
         let verb_display = verb_name.clone();
 
@@ -229,11 +271,11 @@ pub async fn run_monorepo(
             let mut code = 0;
             for mut res in resolutions {
                 if let Some(last) = res.plans.last_mut() {
-                    last.args.extend(extra_args.iter().cloned());
+                    last.append_extra_args(&extra_args);
                 }
 
                 for plan in res.plans {
-                    let c = run_prefixed_command(&plan, &project.name, dry_run).await;
+                    let c = run_prefixed_command(&plan, &project.name, dry_run, quiet).await;
                     match c {
                         Ok(exit) if exit != 0 => {
                             code = exit;
@@ -302,47 +344,55 @@ async fn run_dev_monorepo(
         if let Ok(resolutions) = crate::resolve::resolve(&project.root, &opts.verb, None, cfg) {
             for res in resolutions {
                 for plan in res.plans {
-                    ui.print_cmd(&format!(
-                        "[{}] {}",
-                        project.name,
-                        crate::exec::format_cmd(&plan)
-                    ));
+                    let cmd_str = format!("[{}] {}", project.name, crate::exec::format_cmd(&plan));
                     if opts.dry_run {
+                        if ui.color {
+                            eprintln!("  {}", format!("→ {cmd_str}").cyan());
+                        } else {
+                            eprintln!("  → {cmd_str}");
+                        }
                         continue;
                     }
-                    if let Some(resolved) = crate::exec::resolve_program(&plan.program, &plan.cwd) {
-                        let mut cmd = crate::exec::build_command(&plan, &resolved);
-                        cmd.stdout(Stdio::piped());
-                        cmd.stderr(Stdio::piped());
+                    ui.print_cmd(&cmd_str);
+                    let mut cmd = if let Some(raw) = &plan.raw_shell {
+                        crate::exec::build_shell_command(raw, &plan)
+                    } else if let Some(resolved) =
+                        crate::exec::resolve_program(&plan.program, &plan.cwd)
+                    {
+                        crate::exec::build_command(&plan, &resolved)
+                    } else {
+                        continue;
+                    };
+                    cmd.stdout(Stdio::piped());
+                    cmd.stderr(Stdio::piped());
 
-                        if let Ok(mut child) = cmd.spawn() {
-                            let stdout = child.stdout.take();
-                            let stderr = child.stderr.take();
-                            let prefix = project.name.clone();
+                    if let Ok(mut child) = cmd.spawn() {
+                        let stdout = child.stdout.take();
+                        let stderr = child.stderr.take();
+                        let prefix = project.name.clone();
 
-                            tokio::spawn(async move {
-                                if let Some(out) = stdout {
-                                    use tokio::io::{AsyncBufReadExt, BufReader};
-                                    let mut reader = BufReader::new(out).lines();
-                                    while let Ok(Some(line)) = reader.next_line().await {
-                                        println!("[{prefix}] {line}");
-                                    }
+                        tokio::spawn(async move {
+                            if let Some(out) = stdout {
+                                use tokio::io::{AsyncBufReadExt, BufReader};
+                                let mut reader = BufReader::new(out).lines();
+                                while let Ok(Some(line)) = reader.next_line().await {
+                                    println!("[{prefix}] {line}");
                                 }
-                            });
+                            }
+                        });
 
-                            let prefix_err = project.name.clone();
-                            tokio::spawn(async move {
-                                if let Some(err) = stderr {
-                                    use tokio::io::{AsyncBufReadExt, BufReader};
-                                    let mut reader = BufReader::new(err).lines();
-                                    while let Ok(Some(line)) = reader.next_line().await {
-                                        eprintln!("[{prefix_err}] {line}");
-                                    }
+                        let prefix_err = project.name.clone();
+                        tokio::spawn(async move {
+                            if let Some(err) = stderr {
+                                use tokio::io::{AsyncBufReadExt, BufReader};
+                                let mut reader = BufReader::new(err).lines();
+                                while let Ok(Some(line)) = reader.next_line().await {
+                                    eprintln!("[{prefix_err}] {line}");
                                 }
-                            });
+                            }
+                        });
 
-                            children.push(child);
-                        }
+                        children.push(child);
                     }
                 }
             }
@@ -369,26 +419,33 @@ async fn run_prefixed_command(
     plan: &CommandPlan,
     project_name: &str,
     dry_run: bool,
+    quiet: bool,
 ) -> Result<i32> {
     let cmd_str = crate::exec::format_cmd(plan);
-    println!("  → [{project_name}] {cmd_str}");
-
     if dry_run {
+        println!("  → [{project_name}] {cmd_str}");
         return Ok(0);
     }
 
-    let program_path = match crate::exec::resolve_program(&plan.program, &plan.cwd) {
-        Some(p) => p,
-        None => {
-            eprintln!(
-                "[{project_name}] sgl: '{}' not found for {}",
-                plan.program, plan.reason
-            );
-            return Ok(127);
-        }
-    };
+    if !quiet {
+        println!("  → [{project_name}] {cmd_str}");
+    }
 
-    let mut cmd = crate::exec::build_command(plan, &program_path);
+    let mut cmd = if let Some(raw) = &plan.raw_shell {
+        crate::exec::build_shell_command(raw, plan)
+    } else {
+        let program_path = match crate::exec::resolve_program(&plan.program, &plan.cwd) {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[{project_name}] sgl: '{}' not found for {}",
+                    plan.program, plan.reason
+                );
+                return Ok(127);
+            }
+        };
+        crate::exec::build_command(plan, &program_path)
+    };
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -463,10 +520,14 @@ fn print_summary_table(results: &[ProjectResult], ui: &Ui) {
             "{:<w_proj$}  {:<w_verb$}  {:<7}  {}",
             r.project, r.verb, status_str, dur
         );
-        match r.status {
-            ProjectStatus::Success => ui.success(&line),
-            ProjectStatus::Failed => ui.error(&line),
-            ProjectStatus::Skipped => ui.warn(&line),
+        if ui.color {
+            match r.status {
+                ProjectStatus::Success => eprintln!("{}", line.green()),
+                ProjectStatus::Failed => eprintln!("{}", line.red()),
+                ProjectStatus::Skipped => eprintln!("{}", line.yellow()),
+            }
+        } else {
+            eprintln!("{line}");
         }
     }
 }

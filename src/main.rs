@@ -149,7 +149,7 @@ async fn run(args: Cli) -> Result<()> {
             )
             .await?
         }
-        Commands::Doctor => doctor::run(&cwd, &ui, args.json),
+        Commands::Doctor => doctor::run(&cwd, &ui, args.json, args.project.as_deref()),
         Commands::Info => {
             print_info(&cwd, cfg, &ui, args.json);
             0
@@ -220,7 +220,7 @@ async fn run_verb_with_args(
             for mut res in resolutions {
                 // Append extra args to the last plan
                 if let Some(last) = res.plans.last_mut() {
-                    last.args.extend(extra_args.iter().cloned());
+                    last.append_extra_args(extra_args);
                 }
                 let c = exec::run_sequence(&res.plans, ui, dry_run).await?;
                 if c != 0 {
@@ -242,7 +242,7 @@ async fn run_verb_with_args(
     }
 }
 
-fn print_info(cwd: &Path, cfg: Option<&config::Config>, ui: &Ui, json: bool) {
+fn print_info(cwd: &Path, cfg: Option<&config::Config>, _ui: &Ui, json: bool) {
     let subs = monorepo::discover(cwd);
     let projects = if subs.len() > 1 || (!subs.is_empty() && monorepo::is_workspace_root(cwd)) {
         subs
@@ -267,47 +267,45 @@ fn print_info(cwd: &Path, cfg: Option<&config::Config>, ui: &Ui, json: bool) {
     }
 
     if projects.is_empty() {
-        ui.warn("No projects detected in this directory.");
+        eprintln!("No projects detected in this directory.");
         return;
     }
 
-    if !ui.quiet {
-        if projects.len() > 1 {
-            // Tree display for monorepo
-            let root_name = dir_name(cwd);
-            eprintln!("{root_name}");
-            for (i, p) in projects.iter().enumerate() {
-                let is_last = i == projects.len() - 1;
-                let branch = if is_last { "└── " } else { "├── " };
-                let pm = p
-                    .package_manager
-                    .as_deref()
-                    .map(|pm| format!(" ({pm})"))
-                    .unwrap_or_default();
-                let rel = p
-                    .root
-                    .strip_prefix(cwd)
-                    .map(|r| r.display().to_string())
-                    .unwrap_or_else(|_| p.name.clone());
-                eprintln!("{branch}{} [{kind}]{pm} ({rel})", p.name, kind = p.kind);
-            }
-        } else {
-            for p in &projects {
-                let pm = p
-                    .package_manager
-                    .as_deref()
-                    .map(|pm| format!(" ({pm})"))
-                    .unwrap_or_default();
-                eprintln!("  {} [{}]{}", p.name, p.kind, pm);
-            }
+    if projects.len() > 1 {
+        // Tree display for monorepo
+        let root_name = dir_name(cwd);
+        eprintln!("{root_name}");
+        for (i, p) in projects.iter().enumerate() {
+            let is_last = i == projects.len() - 1;
+            let branch = if is_last { "└── " } else { "├── " };
+            let pm = p
+                .package_manager
+                .as_deref()
+                .map(|pm| format!(" ({pm})"))
+                .unwrap_or_default();
+            let rel = p
+                .root
+                .strip_prefix(cwd)
+                .map(|r| r.display().to_string())
+                .unwrap_or_else(|_| p.name.clone());
+            eprintln!("{branch}{} [{kind}]{pm} ({rel})", p.name, kind = p.kind);
         }
+    } else {
+        for p in &projects {
+            let pm = p
+                .package_manager
+                .as_deref()
+                .map(|pm| format!(" ({pm})"))
+                .unwrap_or_default();
+            eprintln!("  {} [{}]{}", p.name, p.kind, pm);
+        }
+    }
 
-        if let Some(cfg) = cfg {
-            if let Some(name) = &cfg.project.name {
-                eprintln!("  config: singularity.toml (project: {name})");
-            } else {
-                eprintln!("  config: singularity.toml");
-            }
+    if let Some(cfg) = cfg {
+        if let Some(name) = &cfg.project.name {
+            eprintln!("  config: singularity.toml (project: {name})");
+        } else {
+            eprintln!("  config: singularity.toml");
         }
     }
 }

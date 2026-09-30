@@ -54,13 +54,13 @@ cargo install --path .
 | `sgl build` | Build |
 | `sgl lint` | Lint and format check |
 | `sgl fmt` | Auto-format |
-| `sgl run <script>` | Run a project script or task |
+| `sgl run <script> [args]` | Run a project script or task (forwards extra args; inserts npm `--` separator) |
 | `sgl doctor` | Check tool versions |
 | `sgl info [--json]` | Show detected projects |
 | `sgl init` | Write `singularity.toml` |
 | `sgl completions <shell>` | Print shell completions |
 
-Global flags: `--dry-run`, `--verbose`, `--quiet`, `--no-color`, `--cwd <path>`, `--project <name>`, `--explain <verb>`, `--json`.
+Global flags: `--dry-run`, `--verbose`, `--quiet`, `--no-color`, `--cwd <path>`, `--project <name>`, `--changed`, `--serial`, `--fail-fast`, `--explain <verb>`, `--json`.
 
 ## Supported ecosystems
 
@@ -74,7 +74,7 @@ Global flags: `--dry-run`, `--verbose`, `--quiet`, `--no-color`, `--cwd <path>`,
 | .NET | `*.sln`, `*.csproj` | dotnet |
 | Ruby | `Gemfile` | bundler |
 | Docker | `docker-compose.yml`, `compose.yaml` | docker |
-| Make | `Makefile`, `justfile`, `Taskfile.yml` | make, just, task |
+| Make / Just | `Makefile`, `justfile`, `Justfile`, `Taskfile.yml` | make, just (recipes parsed zero-config), task |
 
 ## Monorepo usage
 
@@ -104,7 +104,7 @@ DATABASE_URL = "postgres://localhost/dev"
 ```
 
 - `[commands]` overrides any verb or adds new scripts accessible via `sgl run <name>`.
-- Values can be a string or a list (runs in sequence).
+- Values can be a string or a list (runs in sequence). Commands are run through a shell (`cmd /C` on Windows, `sh -c` on Unix) preserving quotes, pipes, and environment syntax without re-splitting.
 - `[env]` applies to all commands.
 - Config errors include the file path and line number.
 

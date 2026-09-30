@@ -75,6 +75,8 @@ pub struct CommandPlan {
     pub reason: String,
     /// Fallback command if the primary is unavailable (optional).
     pub fallback: Option<Box<CommandPlan>>,
+    /// If Some, raw shell command from singularity.toml to be run through a shell.
+    pub raw_shell: Option<String>,
 }
 
 impl CommandPlan {
@@ -92,6 +94,31 @@ impl CommandPlan {
             env: HashMap::new(),
             reason: reason.into(),
             fallback: None,
+            raw_shell: None,
+        }
+    }
+
+    /// Build a plan from a raw shell command string (e.g. from singularity.toml).
+    pub fn shell(
+        cmd: impl Into<String>,
+        cwd: PathBuf,
+        env: HashMap<String, String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        let raw = cmd.into();
+        #[cfg(windows)]
+        let (program, args) = ("cmd".to_string(), vec!["/C".to_string(), raw.clone()]);
+        #[cfg(not(windows))]
+        let (program, args) = ("sh".to_string(), vec!["-c".to_string(), raw.clone()]);
+
+        CommandPlan {
+            program,
+            args,
+            cwd,
+            env,
+            reason: reason.into(),
+            fallback: None,
+            raw_shell: Some(raw),
         }
     }
 
@@ -99,6 +126,46 @@ impl CommandPlan {
     pub fn with_fallback(mut self, fallback: CommandPlan) -> Self {
         self.fallback = Some(Box::new(fallback));
         self
+    }
+
+    /// Append extra arguments to the plan, inserting npm's required "--" separator when appropriate.
+    pub fn append_extra_args(&mut self, extra_args: &[String]) {
+        if extra_args.is_empty() {
+            return;
+        }
+
+        let needs_npm_dashdash = {
+            let prog = self
+                .program
+                .trim_end_matches(".cmd")
+                .trim_end_matches(".exe");
+            let is_npm_prog = prog == "npm"
+                && (self.args.first().map(|s| s.as_str()) == Some("run")
+                    || self.args.first().map(|s| s.as_str()) == Some("test"));
+            let is_npm_raw = if let Some(raw) = &self.raw_shell {
+                let trimmed = raw.trim_start();
+                trimmed.starts_with("npm run ") || trimmed.starts_with("npm test")
+            } else {
+                false
+            };
+            (is_npm_prog || is_npm_raw)
+                && !self.args.iter().any(|a| a == "--")
+                && extra_args.first().map(|s| s.as_str()) != Some("--")
+        };
+
+        if let Some(raw) = &mut self.raw_shell {
+            raw.push(' ');
+            if needs_npm_dashdash {
+                raw.push_str("-- ");
+            }
+            raw.push_str(&extra_args.join(" "));
+        }
+
+        if needs_npm_dashdash {
+            self.args.push("--".to_string());
+        }
+
+        self.args.extend(extra_args.iter().cloned());
     }
 }
 

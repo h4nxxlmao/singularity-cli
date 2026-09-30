@@ -25,6 +25,60 @@ fn parse_make_targets(content: &str) -> HashMap<String, String> {
     targets
 }
 
+fn parse_just_recipes(content: &str) -> HashMap<String, String> {
+    let mut recipes = HashMap::new();
+    let mut is_private = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+
+        if trimmed == "[private]" {
+            is_private = true;
+            continue;
+        }
+
+        // Indented lines are part of the recipe body
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+
+        if let Some(colon_pos) = trimmed.find(':') {
+            // Check if it's := (assignment)
+            if trimmed[colon_pos..].starts_with(":=") {
+                is_private = false;
+                continue;
+            }
+
+            let sig = trimmed[..colon_pos].trim();
+            if sig.starts_with("set ") || sig.starts_with("export ") || sig.starts_with("alias ") {
+                is_private = false;
+                continue;
+            }
+
+            let clean_sig = sig.trim_start_matches('@').trim();
+            let name = clean_sig.split_whitespace().next().unwrap_or("");
+
+            if !name.is_empty()
+                && !name.starts_with('_')
+                && !is_private
+                && name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                && !name.chars().next().unwrap().is_ascii_digit()
+            {
+                recipes.insert(name.to_string(), format!("just {name}"));
+            }
+        }
+
+        is_private = false;
+    }
+
+    recipes
+}
+
 pub(crate) fn detect_runner(dir: &Path) -> Option<(&'static str, &'static str)> {
     // (runner, marker file)
     if dir.join("Taskfile.yml").exists() || dir.join("Taskfile.yaml").exists() {
@@ -41,9 +95,21 @@ pub(crate) fn detect_runner(dir: &Path) -> Option<(&'static str, &'static str)> 
 
 pub(crate) fn detect_make_scripts(dir: &Path) -> HashMap<String, String> {
     if let Some((runner, marker)) = detect_runner(dir) {
+        let marker_path = if dir.join(marker).exists() {
+            dir.join(marker)
+        } else if runner == "just" && dir.join("Justfile").exists() {
+            dir.join("Justfile")
+        } else if runner == "make" && dir.join("makefile").exists() {
+            dir.join("makefile")
+        } else {
+            dir.join(marker)
+        };
+
+        let content = std::fs::read_to_string(&marker_path).unwrap_or_default();
         if runner == "make" {
-            let content = std::fs::read_to_string(dir.join(marker)).unwrap_or_default();
             parse_make_targets(&content)
+        } else if runner == "just" {
+            parse_just_recipes(&content)
         } else {
             HashMap::new()
         }
@@ -59,10 +125,21 @@ impl Detector for MakeDetector {
 
     fn detect(&self, dir: &Path) -> Option<Project> {
         let (runner, marker) = detect_runner(dir)?;
+        let marker_path = if dir.join(marker).exists() {
+            dir.join(marker)
+        } else if runner == "just" && dir.join("Justfile").exists() {
+            dir.join("Justfile")
+        } else if runner == "make" && dir.join("makefile").exists() {
+            dir.join("makefile")
+        } else {
+            dir.join(marker)
+        };
 
+        let content = std::fs::read_to_string(&marker_path).unwrap_or_default();
         let scripts = if runner == "make" {
-            let content = std::fs::read_to_string(dir.join(marker)).unwrap_or_default();
             parse_make_targets(&content)
+        } else if runner == "just" {
+            parse_just_recipes(&content)
         } else {
             HashMap::new()
         };
@@ -81,12 +158,18 @@ impl Detector for MakeDetector {
         let cwd = project.root.clone();
 
         match verb {
-            Verb::Run(target) => Some(CommandPlan::simple(
-                runner,
-                [target.as_str()],
-                cwd,
-                format!("{runner} target"),
-            )),
+            Verb::Run(target) => {
+                if project.scripts.is_empty() || project.scripts.contains_key(target.as_str()) {
+                    Some(CommandPlan::simple(
+                        runner,
+                        [target.as_str()],
+                        cwd,
+                        format!("{runner} target"),
+                    ))
+                } else {
+                    None
+                }
+            }
             // Map standard verbs to same-named targets if they exist
             other => {
                 let target_name = other.name();
@@ -95,7 +178,7 @@ impl Detector for MakeDetector {
                         runner,
                         [target_name],
                         cwd,
-                        format!("{runner}: {target_name} target found"),
+                        format!("{runner}: {target_name} recipe found"),
                     ))
                 } else {
                     None
@@ -183,5 +266,55 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let d = MakeDetector;
         assert!(d.detect(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn detects_justfile_and_recipes() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        let justfile = r#"# Sample Justfile
+set dotenv-load := true
+
+build:
+    cargo build
+
+test filter="":
+    cargo test
+
+_hidden:
+    echo hidden
+
+[private]
+internal:
+    echo secret
+
+deploy target:
+    ./deploy.sh {{target}}
+"#;
+        fs::write(dir.join("justfile"), justfile).unwrap();
+
+        let d = MakeDetector;
+        let p = d.detect(dir).unwrap();
+        assert_eq!(p.kind, ProjectKind::Make);
+        assert_eq!(p.package_manager.as_deref(), Some("just"));
+        assert!(p.scripts.contains_key("build"));
+        assert!(p.scripts.contains_key("test"));
+        assert!(p.scripts.contains_key("deploy"));
+        assert!(!p.scripts.contains_key("_hidden"));
+        assert!(!p.scripts.contains_key("internal"));
+
+        let plan_test = d.plan(&p, &Verb::Test).unwrap();
+        assert_eq!(plan_test.program, "just");
+        assert_eq!(plan_test.args, vec!["test"]);
+
+        let plan_build = d.plan(&p, &Verb::Build).unwrap();
+        assert_eq!(plan_build.program, "just");
+        assert_eq!(plan_build.args, vec!["build"]);
+
+        let plan_run = d.plan(&p, &Verb::Run("deploy".into())).unwrap();
+        assert_eq!(plan_run.program, "just");
+        assert_eq!(plan_run.args, vec!["deploy"]);
+
+        assert!(d.plan(&p, &Verb::Dev).is_none());
     }
 }

@@ -46,7 +46,7 @@ pub fn resolve(
     for detector in &detectors {
         if let Some(mut project) = detector.detect(dir) {
             if let Some(filter) = project_filter {
-                if project.name != filter {
+                if !crate::monorepo::project_matches_filter(&project, filter, dir) {
                     continue;
                 }
             }
@@ -182,7 +182,7 @@ fn supported_verbs_for_kind(project: &Project) -> Vec<&'static str> {
             "run <script>",
         ],
         ProjectKind::Java => vec!["setup", "dev", "build", "test", "lint", "run <task>"],
-        ProjectKind::DotNet => vec!["setup", "dev", "build", "test", "fmt", "run"],
+        ProjectKind::DotNet => vec!["setup", "build", "test", "fmt", "run"],
         ProjectKind::Ruby => vec!["setup", "dev", "test", "lint", "fmt", "run <script>"],
         ProjectKind::Docker => vec!["setup", "dev", "build", "run <service>"],
         ProjectKind::Make => vec!["run <target>"],
@@ -195,10 +195,21 @@ pub fn detect_one_in(dir: &Path) -> Option<crate::detect::Project> {
 
 pub fn format_unavailable_message(dir: &Path, verb_str: &str, project: Option<&Project>) -> String {
     if let Some(project) = project {
+        let runner = project.package_manager.as_deref().unwrap_or("make");
+        let (marker, entity) = match runner {
+            "just" => ("justfile", "recipe"),
+            "task" => ("Taskfile.yml", "task"),
+            _ => ("Makefile", "target"),
+        };
+
         let pm_str = match &project.package_manager {
             Some(pm) if pm != "docker" && pm.as_str() != project.kind.to_string().as_str() => {
-                let display_pm = if pm == "mvn" { "maven" } else { pm.as_str() };
-                format!("{}, {}", project.kind, display_pm)
+                if project.kind == ProjectKind::Make {
+                    pm.to_string()
+                } else {
+                    let display_pm = if pm == "mvn" { "maven" } else { pm.as_str() };
+                    format!("{}, {}", project.kind, display_pm)
+                }
             }
             _ => format!("{}", project.kind),
         };
@@ -223,6 +234,15 @@ pub fn format_unavailable_message(dir: &Path, verb_str: &str, project: Option<&P
                     }
                 } else {
                     format!("verb '{verb_str}' is not supported by {}", pm_str)
+                }
+            }
+            ProjectKind::Make => {
+                if project.scripts.is_empty() {
+                    format!(
+                        "no \"{verb_str}\" {entity} in {marker} (no {entity}s defined in {marker})"
+                    )
+                } else {
+                    format!("no \"{verb_str}\" {entity} in {marker}")
                 }
             }
             _ => format!(
@@ -257,6 +277,16 @@ pub fn format_unavailable_message(dir: &Path, verb_str: &str, project: Option<&P
                     "setup, dev, test, build".to_string()
                 }
             }
+            ProjectKind::Make => {
+                if project.scripts.is_empty() {
+                    "none".to_string()
+                } else {
+                    let mut scripts: Vec<&str> =
+                        project.scripts.keys().map(|s| s.as_str()).collect();
+                    scripts.sort_unstable();
+                    scripts.join(", ")
+                }
+            }
             _ => {
                 let verbs = supported_verbs_for_kind(project);
                 verbs.join(", ")
@@ -277,6 +307,9 @@ pub fn format_unavailable_message(dir: &Path, verb_str: &str, project: Option<&P
                     "configure a checkstyle or spotless plugin in pom.xml, or define 'lint' in singularity.toml under [commands]".to_string()
                 }
             }
+            ProjectKind::Make => {
+                format!("add a \"{verb_str}\" {entity} to {marker}, or define it in singularity.toml under [commands]")
+            }
             _ => format!("define '{verb_str}' in singularity.toml under [commands]"),
         };
 
@@ -286,7 +319,7 @@ pub fn format_unavailable_message(dir: &Path, verb_str: &str, project: Option<&P
         )
     } else {
         format!(
-            "sgl: no project detected in {}\navailable: setup, dev, test, build, lint, fmt, run <script>, doctor, info, init\nhint: run 'sgl init' to create a singularity.toml",
+            "sgl: no '{verb_str}' command for this project (no project detected)\npath: {}\nreason: no project detected in this directory\navailable: setup, dev, test, build, lint, fmt, run <script>, doctor, info, init\nhint: run 'sgl init' to create a singularity.toml",
             dir.display()
         )
     }
