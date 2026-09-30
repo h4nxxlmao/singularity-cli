@@ -64,9 +64,10 @@ pub fn run(dir: &Path, ui: &Ui, json: bool) -> i32 {
 }
 
 fn check_tool(req: &ToolRequirement) -> ToolStatus {
-    match which::which(&req.tool) {
-        Ok(_path) => {
-            let version = get_version(&req.tool);
+    let resolved = crate::exec::resolve_program(&req.tool, Path::new("."));
+    match resolved {
+        Some(path) => {
+            let version = get_version(&path);
             let status = if req.version_req.is_empty() {
                 "ok"
             } else {
@@ -85,7 +86,7 @@ fn check_tool(req: &ToolRequirement) -> ToolStatus {
                 fix: None,
             }
         }
-        Err(_) => {
+        None => {
             let fix = build_fix_hint(&req.install_hint);
             ToolStatus {
                 tool: req.tool.clone(),
@@ -98,24 +99,49 @@ fn check_tool(req: &ToolRequirement) -> ToolStatus {
     }
 }
 
-fn get_version(tool: &str) -> Option<String> {
-    let output = std::process::Command::new(tool)
+fn get_version(program_path: &Path) -> Option<String> {
+    #[cfg(windows)]
+    let output = {
+        if crate::exec::is_windows_batch(program_path) {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.arg("/C");
+            let prog_str = crate::exec::quote_win_arg(&program_path.to_string_lossy());
+            let full_cmd = format!("\"{} --version\"", prog_str);
+            use std::os::windows::process::CommandExt;
+            cmd.raw_arg(&full_cmd);
+            cmd.output().ok()?
+        } else {
+            std::process::Command::new(program_path)
+                .arg("--version")
+                .output()
+                .ok()?
+        }
+    };
+    #[cfg(not(windows))]
+    let output = std::process::Command::new(program_path)
         .arg("--version")
         .output()
         .ok()?;
+
     let text = String::from_utf8_lossy(&output.stdout).to_string();
+    let text = if text.trim().is_empty() {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    } else {
+        text
+    };
+
     // Extract first version-looking token
     for word in text.split_whitespace() {
-        if word
+        let clean = word
+            .trim_start_matches(['v', 'V'])
+            .trim_end_matches(|c: char| !c.is_alphanumeric() && c != '.');
+        if clean
             .chars()
             .next()
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false)
         {
-            return Some(
-                word.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '.')
-                    .to_string(),
-            );
+            return Some(clean.to_string());
         }
     }
     None

@@ -452,18 +452,177 @@ fn missing_tool_exits_127_with_hint() {
         .arg(dir)
         .assert()
         .code(127)
-        .stderr(predicate::str::contains("nonexistent_tool_xyz_987"));
+        .stderr(predicate::str::contains(
+            "sgl: 'nonexistent_tool_xyz_987' not found on PATH",
+        ))
+        .stderr(predicate::str::contains(
+            "needed for: nonexistent_tool_xyz_987",
+        ));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_cmd_shim_execution() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    let shim = dir.join("my-shim.cmd");
+    std::fs::write(&shim, "@echo off\r\necho SHIM_OUTPUT\r\nexit 0\r\n").unwrap();
+    std::fs::write(
+        dir.join("singularity.toml"),
+        "[commands]\nbuild = \"./my-shim.cmd\"\n",
+    )
+    .unwrap();
+
+    sgl().args(["build", "--cwd"]).arg(dir).assert().success();
 }
 
 #[test]
-fn unsupported_verb_message_for_docker() {
+fn cwd_containing_spaces_works() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let spaced_dir = tmp.path().join("vsc save 7").join("hanx.pro-v2");
+    std::fs::create_dir_all(&spaced_dir).unwrap();
+    std::fs::write(
+        spaced_dir.join("package.json"),
+        r#"{"name":"spaced-app","scripts":{"dev":"echo DEV_OK","build":"echo BUILD_OK"}}"#,
+    )
+    .unwrap();
+
+    // 1. info works with spaced path
+    sgl()
+        .args(["info", "--cwd"])
+        .arg(&spaced_dir)
+        .assert()
+        .success();
+
+    // 2. doctor works with spaced path
+    sgl()
+        .args(["doctor", "--cwd"])
+        .arg(&spaced_dir)
+        .assert()
+        .success();
+
+    // 3. explain works with spaced path
+    sgl()
+        .args(["--explain", "build", "--cwd"])
+        .arg(&spaced_dir)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("cwd:"))
+        .stderr(predicate::str::contains("vsc save 7"));
+}
+
+#[test]
+fn spaced_monorepo_and_gitignore() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("vsc save 7").join("hanx.pro-v2");
+    let pkg_a = root.join("packages").join("pkg a");
+    let ignored_pkg = root.join("packages").join("ignored pkg");
+    std::fs::create_dir_all(&pkg_a).unwrap();
+    std::fs::create_dir_all(&ignored_pkg).unwrap();
+
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"root","workspaces":["packages/*"]}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join(".gitignore"), "packages/ignored pkg/\n").unwrap();
+    std::fs::write(
+        pkg_a.join("package.json"),
+        r#"{"name":"pkg-a","scripts":{"dev":"echo DEV"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ignored_pkg.join("package.json"),
+        r#"{"name":"ignored-pkg","scripts":{"dev":"echo DEV"}}"#,
+    )
+    .unwrap();
+
+    let out = sgl()
+        .args(["info", "--json", "--cwd"])
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("pkg-a"));
+    assert!(!stdout.contains("ignored-pkg"));
+}
+
+#[test]
+fn node_missing_script_error_message() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name":"partial-app","scripts":{"dev":"vite","build":"vite build"}}"#,
+    )
+    .unwrap();
+
+    sgl()
+        .args(["test", "--cwd"])
+        .arg(dir)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "sgl: no 'test' command for this project (node, npm)",
+        ))
+        .stderr(predicate::str::contains(
+            "reason: no \"test\" script in package.json",
+        ))
+        .stderr(predicate::str::contains("available: build, dev"))
+        .stderr(predicate::str::contains("hint: add a \"test\" script to package.json, or define it in singularity.toml under [commands]"))
+        .stderr(predicate::str::contains("path:"));
+
+    // Also verify --explain test prints the exact same message
+    sgl()
+        .args(["--explain", "test", "--cwd"])
+        .arg(dir)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "sgl: no 'test' command for this project (node, npm)",
+        ))
+        .stderr(predicate::str::contains(
+            "reason: no \"test\" script in package.json",
+        ))
+        .stderr(predicate::str::contains("available: build, dev"))
+        .stderr(predicate::str::contains("path:"));
+}
+
+#[test]
+fn docker_lint_unavailable_error_message() {
     sgl()
         .args(["lint", "--cwd"])
         .arg(fixtures().join("compose"))
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("not available for docker"))
-        .stderr(predicate::str::contains("Supported verbs:"));
+        .stderr(predicate::str::contains(
+            "sgl: no 'lint' command for this project (docker)",
+        ))
+        .stderr(predicate::str::contains(
+            "reason: docker compose does not define a standard 'lint' command",
+        ))
+        .stderr(predicate::str::contains("available: setup, dev, build"))
+        .stderr(predicate::str::contains("path:"));
+}
+
+#[test]
+fn maven_lint_unavailable_error_message() {
+    sgl()
+        .args(["lint", "--cwd"])
+        .arg(fixtures().join("java-maven"))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "sgl: no 'lint' command for this project (java, maven)",
+        ))
+        .stderr(predicate::str::contains(
+            "reason: neither checkstyle nor spotless plugins are configured in pom.xml",
+        ))
+        .stderr(predicate::str::contains(
+            "available: setup, dev, test, build",
+        ))
+        .stderr(predicate::str::contains("path:"));
 }
 
 #[test]

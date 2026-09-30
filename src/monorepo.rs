@@ -57,6 +57,7 @@ pub fn discover_with_depth(root: &Path, max_depth: usize) -> Vec<Project> {
         .max_depth(Some(max_depth))
         .hidden(false)
         .git_ignore(true)
+        .require_git(false)
         .filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -75,7 +76,7 @@ pub fn discover_with_depth(root: &Path, max_depth: usize) -> Vec<Project> {
         }
         let dir = entry.path();
         // Skip root itself (sub-projects only)
-        if dir == root {
+        if entry.depth() == 0 || dir == root {
             continue;
         }
 
@@ -310,12 +311,7 @@ async fn run_dev_monorepo(
                         continue;
                     }
                     if let Some(resolved) = crate::exec::resolve_program(&plan.program, &plan.cwd) {
-                        let mut cmd = tokio::process::Command::new(resolved);
-                        cmd.args(&plan.args);
-                        cmd.current_dir(&plan.cwd);
-                        for (k, v) in &plan.env {
-                            cmd.env(k, v);
-                        }
+                        let mut cmd = crate::exec::build_command(&plan, &resolved);
                         cmd.stdout(Stdio::piped());
                         cmd.stderr(Stdio::piped());
 
@@ -392,12 +388,8 @@ async fn run_prefixed_command(
         }
     };
 
-    let mut cmd = tokio::process::Command::new(program_path);
-    cmd.args(&plan.args);
-    cmd.current_dir(&plan.cwd);
-    for (k, v) in &plan.env {
-        cmd.env(k, v);
-    }
+    let mut cmd = crate::exec::build_command(plan, &program_path);
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 

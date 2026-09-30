@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use std::path::Path;
 
 use crate::config::{self, Config};
-use crate::detect::{all_detectors, CommandPlan, Project, ProjectKind, Verb};
+use crate::detect::{all_detectors, CommandPlan, Detector, Project, ProjectKind, Verb};
 
 /// The result of resolving a verb for a project.
 pub struct Resolution {
@@ -89,43 +89,18 @@ pub fn resolve(
         }
     }
 
+    let verb_str = match verb {
+        Verb::Run(s) => s.as_str(),
+        v => v.name(),
+    };
+
     if let Some((project, _)) = detected_project {
-        // Project was detected, but the verb is not supported
-        if project.kind == ProjectKind::Node {
-            let verb_str = match verb {
-                Verb::Run(s) => s.as_str(),
-                v => v.name(),
-            };
-            if project.scripts.is_empty() {
-                bail!(
-                    "no '{verb_str}' script in package.json. No scripts defined in package.json."
-                );
-            } else {
-                let mut scripts: Vec<&str> = project.scripts.keys().map(|s| s.as_str()).collect();
-                scripts.sort_unstable();
-                bail!(
-                    "no '{verb_str}' script in package.json. Available scripts: {}",
-                    scripts.join(", ")
-                );
-            }
-        } else {
-            let verb_str = match verb {
-                Verb::Run(s) => s.as_str(),
-                v => v.name(),
-            };
-            let supported = supported_verbs_for_kind(&project);
-            bail!(
-                "verb '{verb_str}' is not available for {} projects.\nSupported verbs: {}",
-                project.kind,
-                supported.join(", ")
-            );
-        }
+        let msg = format_unavailable_message(dir, verb_str, Some(&project));
+        bail!("{msg}");
     }
 
-    bail!(
-        "no project detected in {}.\nAvailable verbs: setup, dev, test, build, lint, fmt, run <script>, doctor, info, init",
-        dir.display()
-    );
+    let msg = format_unavailable_message(dir, verb_str, None);
+    bail!("{msg}");
 }
 
 /// Resolve a verb and return all available plans with explanations (for --explain).
@@ -214,8 +189,107 @@ fn supported_verbs_for_kind(project: &Project) -> Vec<&'static str> {
     }
 }
 
-fn detect_one_in(dir: &Path) -> Option<crate::detect::Project> {
+pub fn detect_one_in(dir: &Path) -> Option<crate::detect::Project> {
     all_detectors().iter().find_map(|d| d.detect(dir))
+}
+
+pub fn format_unavailable_message(dir: &Path, verb_str: &str, project: Option<&Project>) -> String {
+    if let Some(project) = project {
+        let pm_str = match &project.package_manager {
+            Some(pm) if pm != "docker" && pm.as_str() != project.kind.to_string().as_str() => {
+                let display_pm = if pm == "mvn" { "maven" } else { pm.as_str() };
+                format!("{}, {}", project.kind, display_pm)
+            }
+            _ => format!("{}", project.kind),
+        };
+        let reason = match project.kind {
+            ProjectKind::Node => {
+                if project.scripts.is_empty() {
+                    format!("no \"{verb_str}\" script in package.json (no scripts defined in package.json)")
+                } else {
+                    format!("no \"{verb_str}\" script in package.json")
+                }
+            }
+            ProjectKind::Docker => {
+                format!("docker compose does not define a standard '{verb_str}' command")
+            }
+            ProjectKind::Java => {
+                if verb_str == "lint" {
+                    if project.package_manager.as_deref() == Some("gradle") {
+                        "neither checkstyle, spotless, nor ktlint plugins are configured in build.gradle".to_string()
+                    } else {
+                        "neither checkstyle nor spotless plugins are configured in pom.xml"
+                            .to_string()
+                    }
+                } else {
+                    format!("verb '{verb_str}' is not supported by {}", pm_str)
+                }
+            }
+            _ => format!(
+                "verb '{verb_str}' is not supported for {} projects",
+                project.kind
+            ),
+        };
+
+        let available = match project.kind {
+            ProjectKind::Node => {
+                if project.scripts.is_empty() {
+                    "none".to_string()
+                } else {
+                    let mut scripts: Vec<&str> =
+                        project.scripts.keys().map(|s| s.as_str()).collect();
+                    scripts.sort_unstable();
+                    scripts.join(", ")
+                }
+            }
+            ProjectKind::Docker => "setup, dev, build".to_string(),
+            ProjectKind::Java => {
+                let has_lint = if verb_str == "lint" {
+                    false
+                } else {
+                    crate::detect::java::JavaDetector
+                        .plan(project, &Verb::Lint)
+                        .is_some()
+                };
+                if has_lint {
+                    "setup, dev, test, build, lint".to_string()
+                } else {
+                    "setup, dev, test, build".to_string()
+                }
+            }
+            _ => {
+                let verbs = supported_verbs_for_kind(project);
+                verbs.join(", ")
+            }
+        };
+
+        let hint = match project.kind {
+            ProjectKind::Node => format!(
+                "add a \"{verb_str}\" script to package.json, or define it in singularity.toml under [commands]"
+            ),
+            ProjectKind::Docker => format!(
+                "run custom container commands with docker compose run, or define '{verb_str}' in singularity.toml under [commands]"
+            ),
+            ProjectKind::Java if verb_str == "lint" => {
+                if project.package_manager.as_deref() == Some("gradle") {
+                    "configure a checkstyle, spotless, or ktlint plugin in build.gradle, or define 'lint' in singularity.toml under [commands]".to_string()
+                } else {
+                    "configure a checkstyle or spotless plugin in pom.xml, or define 'lint' in singularity.toml under [commands]".to_string()
+                }
+            }
+            _ => format!("define '{verb_str}' in singularity.toml under [commands]"),
+        };
+
+        format!(
+            "sgl: no '{verb_str}' command for this project ({pm_str})\npath: {}\nreason: {reason}\navailable: {available}\nhint: {hint}",
+            project.root.display()
+        )
+    } else {
+        format!(
+            "sgl: no project detected in {}\navailable: setup, dev, test, build, lint, fmt, run <script>, doctor, info, init\nhint: run 'sgl init' to create a singularity.toml",
+            dir.display()
+        )
+    }
 }
 
 fn dir_name(dir: &Path) -> String {

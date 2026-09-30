@@ -32,14 +32,37 @@ async fn main() {
     }
 }
 
+pub fn normalize_path(p: &Path) -> PathBuf {
+    let abs = if p.is_relative() {
+        if let Ok(cur) = std::env::current_dir() {
+            cur.join(p)
+        } else {
+            p.to_path_buf()
+        }
+    } else {
+        p.to_path_buf()
+    };
+
+    #[cfg(windows)]
+    {
+        let s = abs.to_string_lossy().replace('/', "\\");
+        let clean = s.strip_prefix(r"\\?\").unwrap_or(&s);
+        PathBuf::from(clean)
+    }
+    #[cfg(not(windows))]
+    {
+        abs
+    }
+}
+
 async fn run(args: Cli) -> Result<()> {
     let ui = Ui::new(args.no_color, args.quiet, args.verbose);
 
     // Resolve working directory
     let cwd: PathBuf = if let Some(p) = &args.cwd {
-        p.clone()
+        normalize_path(p)
     } else {
-        std::env::current_dir()?
+        normalize_path(&std::env::current_dir()?)
     };
 
     // Load singularity.toml if present
@@ -51,16 +74,18 @@ async fn run(args: Cli) -> Result<()> {
         let verb = Verb::parse(verb_str).unwrap_or_else(|| Verb::Run(verb_str.clone()));
         let explanations = resolve::explain(&cwd, &verb, cfg);
         if explanations.is_empty() {
+            let detected = resolve::detect_one_in(&cwd);
+            let msg = resolve::format_unavailable_message(&cwd, verb_str, detected.as_ref());
             if args.json {
                 let out = serde_json::json!({
                     "schema_version": 1,
                     "verb": verb_str,
-                    "error": format!("no command found for '{verb_str}'"),
+                    "error": msg,
                     "plans": []
                 });
                 println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
             } else {
-                ui.error(&format!("no command found for '{verb_str}'"));
+                ui.error(&msg);
             }
             process::exit(1);
         }
@@ -206,7 +231,12 @@ async fn run_verb_with_args(
             Ok(code)
         }
         Err(e) => {
-            ui.error(&format!("sgl: {e}"));
+            let e_str = e.to_string();
+            if e_str.starts_with("sgl: ") {
+                ui.error(&e_str);
+            } else {
+                ui.error(&format!("sgl: {e_str}"));
+            }
             Ok(1)
         }
     }
