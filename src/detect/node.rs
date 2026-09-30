@@ -27,8 +27,8 @@ struct Engines {
 }
 
 fn detect_package_manager(dir: &Path, pkg: &PackageJson) -> String {
-    // Lockfile takes precedence
-    if dir.join("pnpm-lock.yaml").exists() {
+    // Lockfile or workspace takes precedence
+    if dir.join("pnpm-lock.yaml").exists() || dir.join("pnpm-workspace.yaml").exists() {
         return "pnpm".to_string();
     }
     if dir.join("yarn.lock").exists() {
@@ -55,11 +55,20 @@ impl Detector for NodeDetector {
 
     fn detect(&self, dir: &Path) -> Option<Project> {
         let pkg_path = dir.join("package.json");
-        if !pkg_path.exists() {
+        let has_node_marker = pkg_path.exists()
+            || dir.join("pnpm-workspace.yaml").exists()
+            || dir.join("turbo.json").exists()
+            || dir.join("nx.json").exists();
+        if !has_node_marker {
             return None;
         }
-        let content = std::fs::read_to_string(&pkg_path).ok()?;
-        let pkg: PackageJson = serde_json::from_str(&content).unwrap_or_default();
+
+        let pkg: PackageJson = if pkg_path.exists() {
+            let content = std::fs::read_to_string(&pkg_path).ok()?;
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            PackageJson::default()
+        };
 
         let pm = detect_package_manager(dir, &pkg);
         let name = pkg
@@ -148,10 +157,11 @@ impl Detector for NodeDetector {
 
     fn required_tools(&self, project: &Project) -> Vec<ToolRequirement> {
         let pm = project.package_manager.as_deref().unwrap_or("npm");
+        let node_req = detect_node_version_req(&project.root);
         vec![
             ToolRequirement {
                 tool: "node".to_string(),
-                version_req: String::new(),
+                version_req: node_req,
                 install_hint: InstallHint {
                     brew: Some("node".to_string()),
                     apt: Some("nodejs".to_string()),
@@ -165,6 +175,58 @@ impl Detector for NodeDetector {
                 install_hint: InstallHint::brew(pm),
             },
         ]
+    }
+}
+
+fn detect_node_version_req(dir: &Path) -> String {
+    // 1. .nvmrc
+    let nvmrc = dir.join(".nvmrc");
+    if let Ok(c) = std::fs::read_to_string(&nvmrc) {
+        let trimmed = c.trim();
+        if !trimmed.is_empty() {
+            return normalize_node_version(trimmed);
+        }
+    }
+    // 2. .node-version
+    let node_version = dir.join(".node-version");
+    if let Ok(c) = std::fs::read_to_string(&node_version) {
+        let trimmed = c.trim();
+        if !trimmed.is_empty() {
+            return normalize_node_version(trimmed);
+        }
+    }
+    // 3. package.json engines.node
+    let pkg_path = dir.join("package.json");
+    if let Ok(c) = std::fs::read_to_string(&pkg_path) {
+        if let Ok(pkg) = serde_json::from_str::<PackageJson>(&c) {
+            if let Some(eng) = pkg.engines {
+                if let Some(node_req) = eng.node {
+                    let trimmed = node_req.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn normalize_node_version(v: &str) -> String {
+    let clean = v.trim_start_matches('v').trim();
+    if clean
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        if !clean.contains('.') {
+            format!(">={clean}.0.0")
+        } else {
+            format!(">={clean}")
+        }
+    } else {
+        clean.to_string()
     }
 }
 

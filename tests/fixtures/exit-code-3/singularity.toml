@@ -1,0 +1,2 @@
+[commands]
+test = "powershell -Command exit 3"

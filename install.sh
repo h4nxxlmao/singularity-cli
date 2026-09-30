@@ -57,30 +57,35 @@ fi
 
 [ -z "$VERSION" ] && die "could not determine latest version"
 
+BASE_URL="${SGL_DOWNLOAD_BASE:-https://github.com/$REPO/releases/download/$VERSION}"
 ARCHIVE="sgl-${VERSION}-${target}.tar.gz"
-URL="https://github.com/$REPO/releases/download/$VERSION/$ARCHIVE"
+URL="$BASE_URL/$ARCHIVE"
 
 step "downloading sgl $VERSION .." "done"
 curl -fsSL "$URL" -o "/tmp/$ARCHIVE" || die "download failed"
 
 # ── verify checksum ──────────────────────────────────────────────────────────
 
-SUMS_URL="https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS"
+SUMS_URL="$BASE_URL/SHA256SUMS"
 curl -fsSL "$SUMS_URL" -o /tmp/SHA256SUMS 2>/dev/null || true
 
-if [ -f /tmp/SHA256SUMS ]; then
+if [ -s /tmp/SHA256SUMS ]; then
   expected="$(grep "$ARCHIVE" /tmp/SHA256SUMS | awk '{print $1}')"
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "/tmp/$ARCHIVE" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "/tmp/$ARCHIVE" | awk '{print $1}')"
+  if [ -n "$expected" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual="$(sha256sum "/tmp/$ARCHIVE" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      actual="$(shasum -a 256 "/tmp/$ARCHIVE" | awk '{print $1}')"
+    else
+      actual=""
+    fi
+    if [ -n "$actual" ] && [ "$actual" != "$expected" ]; then
+      die "checksum mismatch for $ARCHIVE (expected $expected, got $actual)"
+    fi
+    step "verifying checksum ........." "ok"
   else
-    actual=""
+    step "verifying checksum ........." "skipped (no entry for $ARCHIVE)"
   fi
-  if [ -n "$actual" ] && [ "$actual" != "$expected" ]; then
-    die "checksum mismatch for $ARCHIVE"
-  fi
-  step "verifying checksum ........." "ok"
 else
   step "verifying checksum ........." "skipped (no SHA256SUMS)"
 fi

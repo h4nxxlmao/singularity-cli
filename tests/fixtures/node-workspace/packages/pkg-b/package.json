@@ -1,0 +1,1 @@
+{"name": "pkg-b", "scripts": {"build": "echo build-b", "test": "echo test-b"}}

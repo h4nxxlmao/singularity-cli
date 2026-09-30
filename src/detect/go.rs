@@ -62,6 +62,10 @@ impl Detector for GoDetector {
             }
             Verb::Fmt => CommandPlan::simple("gofmt", ["-w", "."], cwd, "gofmt -w .: go.mod found"),
             Verb::Run(script) => {
+                // If a Makefile target exists with this name, let Make handle it under `sgl run`
+                if crate::detect::make::detect_make_scripts(&cwd).contains_key(script.as_str()) {
+                    return None;
+                }
                 CommandPlan::simple("go", ["run", script.as_str()], cwd, "go run script")
             }
         };

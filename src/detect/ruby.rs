@@ -33,11 +33,35 @@ impl Detector for RubyDetector {
                 CommandPlan::simple("bundle", ["install"], cwd, "bundle install: Gemfile found")
             }
             Verb::Test => {
-                CommandPlan::simple("bundle", ["exec", "rspec"], cwd, "bundle exec rspec")
+                // Use rspec if spec/ directory exists, otherwise rake test
+                if cwd.join("spec").is_dir() {
+                    CommandPlan::simple(
+                        "bundle",
+                        ["exec", "rspec"],
+                        cwd,
+                        "bundle exec rspec (spec/ found)",
+                    )
+                } else {
+                    CommandPlan::simple(
+                        "bundle",
+                        ["exec", "rake", "test"],
+                        cwd,
+                        "bundle exec rake test (no spec/ dir)",
+                    )
+                }
             }
+            Verb::Lint => {
+                CommandPlan::simple("bundle", ["exec", "rubocop"], cwd, "bundle exec rubocop")
+            }
+            Verb::Fmt => CommandPlan::simple(
+                "bundle",
+                ["exec", "rubocop", "-a"],
+                cwd,
+                "bundle exec rubocop -a",
+            ),
             Verb::Dev => {
                 // Rails
-                if cwd.join("config/routes.rb").exists() {
+                if cwd.join("config/routes.rb").exists() || cwd.join("bin/rails").exists() {
                     CommandPlan::simple(
                         "bundle",
                         ["exec", "rails", "server"],
@@ -106,6 +130,47 @@ mod tests {
         let d = RubyDetector;
         let p = d.detect(dir).unwrap();
         assert_eq!(p.kind, ProjectKind::Ruby);
+    }
+
+    #[test]
+    fn plan_test_rspec_when_spec_dir_exists() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        fs::write(dir.join("Gemfile"), "").unwrap();
+        fs::create_dir(dir.join("spec")).unwrap();
+
+        let d = RubyDetector;
+        let p = d.detect(dir).unwrap();
+        let plan = d.plan(&p, &Verb::Test).unwrap();
+        assert_eq!(plan.program, "bundle");
+        assert!(plan.args.contains(&"rspec".to_string()));
+    }
+
+    #[test]
+    fn plan_test_rake_when_no_spec_dir() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        fs::write(dir.join("Gemfile"), "").unwrap();
+
+        let d = RubyDetector;
+        let p = d.detect(dir).unwrap();
+        let plan = d.plan(&p, &Verb::Test).unwrap();
+        assert_eq!(plan.program, "bundle");
+        assert!(plan.args.contains(&"rake".to_string()));
+        assert!(plan.args.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn plan_lint_rubocop() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        fs::write(dir.join("Gemfile"), "").unwrap();
+
+        let d = RubyDetector;
+        let p = d.detect(dir).unwrap();
+        let plan = d.plan(&p, &Verb::Lint).unwrap();
+        assert_eq!(plan.program, "bundle");
+        assert!(plan.args.contains(&"rubocop".to_string()));
     }
 
     #[test]

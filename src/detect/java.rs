@@ -67,8 +67,15 @@ impl Detector for JavaDetector {
             ("mvn", Verb::Test) => {
                 CommandPlan::simple("mvn", ["test"], cwd, "mvn test: pom.xml found")
             }
-            ("mvn", Verb::Lint) => {
-                CommandPlan::simple("mvn", ["checkstyle:check"], cwd, "mvn checkstyle")
+            ("mvn", Verb::Lint) => maven_lint_plan(&cwd)?,
+            ("mvn", Verb::Fmt) => {
+                let pom = cwd.join("pom.xml");
+                let content = std::fs::read_to_string(&pom).ok()?;
+                if content.contains("spotless") {
+                    CommandPlan::simple("mvn", ["spotless:apply"], cwd, "mvn spotless:apply")
+                } else {
+                    return None;
+                }
             }
             (_, Verb::Setup) => CommandPlan::simple(
                 pm,
@@ -82,8 +89,22 @@ impl Detector for JavaDetector {
             (_, Verb::Test) => {
                 CommandPlan::simple(pm, ["test"], cwd, "gradle test: build.gradle found")
             }
-            (_, Verb::Lint) => {
-                CommandPlan::simple(pm, ["check"], cwd, "gradle check: build.gradle found")
+            (_, Verb::Lint) => gradle_lint_plan(pm, &cwd)?,
+            (_, Verb::Fmt) => {
+                let mut found_spotless = false;
+                for file in &["build.gradle", "build.gradle.kts"] {
+                    if let Ok(c) = std::fs::read_to_string(cwd.join(file)) {
+                        if c.contains("spotless") {
+                            found_spotless = true;
+                            break;
+                        }
+                    }
+                }
+                if found_spotless {
+                    CommandPlan::simple(pm, ["spotlessApply"], cwd, "gradle spotlessApply")
+                } else {
+                    return None;
+                }
             }
             (_, Verb::Run(task)) => CommandPlan::simple(pm, [task.as_str()], cwd, "gradle task"),
             _ => return None,
@@ -127,6 +148,60 @@ impl Detector for JavaDetector {
     }
 }
 
+fn maven_lint_plan(cwd: &Path) -> Option<CommandPlan> {
+    let pom = cwd.join("pom.xml");
+    let content = std::fs::read_to_string(&pom).ok()?;
+    if content.contains("spotless") {
+        Some(CommandPlan::simple(
+            "mvn",
+            ["spotless:check"],
+            cwd.to_path_buf(),
+            "mvn spotless:check configured in pom.xml",
+        ))
+    } else if content.contains("checkstyle") {
+        Some(CommandPlan::simple(
+            "mvn",
+            ["checkstyle:check"],
+            cwd.to_path_buf(),
+            "mvn checkstyle:check configured in pom.xml",
+        ))
+    } else {
+        None
+    }
+}
+
+fn gradle_lint_plan(pm: &str, cwd: &Path) -> Option<CommandPlan> {
+    for file in &["build.gradle", "build.gradle.kts"] {
+        if let Ok(content) = std::fs::read_to_string(cwd.join(file)) {
+            if content.contains("spotless") {
+                return Some(CommandPlan::simple(
+                    pm,
+                    ["spotlessCheck"],
+                    cwd.to_path_buf(),
+                    "gradle spotlessCheck configured",
+                ));
+            }
+            if content.contains("checkstyle") {
+                return Some(CommandPlan::simple(
+                    pm,
+                    ["checkstyleMain"],
+                    cwd.to_path_buf(),
+                    "gradle checkstyleMain configured",
+                ));
+            }
+            if content.contains("ktlint") {
+                return Some(CommandPlan::simple(
+                    pm,
+                    ["ktlintCheck"],
+                    cwd.to_path_buf(),
+                    "gradle ktlintCheck configured",
+                ));
+            }
+        }
+    }
+    None
+}
+
 fn dir_name(dir: &Path) -> &str {
     dir.file_name()
         .and_then(|n| n.to_str())
@@ -159,6 +234,38 @@ mod tests {
         let d = JavaDetector;
         let p = d.detect(dir).unwrap();
         assert_eq!(p.kind, ProjectKind::Java);
+    }
+
+    #[test]
+    fn maven_lint_not_available_without_checkstyle_or_spotless() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        fs::write(
+            dir.join("pom.xml"),
+            "<project><groupId>test</groupId></project>",
+        )
+        .unwrap();
+
+        let d = JavaDetector;
+        let p = d.detect(dir).unwrap();
+        assert!(d.plan(&p, &Verb::Lint).is_none());
+    }
+
+    #[test]
+    fn maven_lint_available_with_checkstyle() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        fs::write(
+            dir.join("pom.xml"),
+            "<project><plugins><plugin><artifactId>maven-checkstyle-plugin</artifactId></plugin></plugins></project>",
+        )
+        .unwrap();
+
+        let d = JavaDetector;
+        let p = d.detect(dir).unwrap();
+        let plan = d.plan(&p, &Verb::Lint).unwrap();
+        assert_eq!(plan.program, "mvn");
+        assert!(plan.args.contains(&"checkstyle:check".to_string()));
     }
 
     #[test]

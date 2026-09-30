@@ -16,22 +16,27 @@ pub struct ToolStatus {
 
 /// Run doctor checks for all detected projects in `dir`.
 pub fn run(dir: &Path, ui: &Ui, json: bool) -> i32 {
-    let projects = detect_all(dir);
-    let detectors = all_detectors();
+    let mut projects = detect_all(dir);
+    if projects.is_empty() {
+        projects = crate::monorepo::discover(dir);
+    }
 
+    let detectors = all_detectors();
     let mut rows: Vec<ToolStatus> = Vec::new();
+    let mut seen_tools = std::collections::HashSet::new();
     let mut exit_code = 0;
 
     for project in &projects {
-        // Find the matching detector
         for detector in &detectors {
             if detector.detect(&project.root).is_some() {
                 for req in detector.required_tools(project) {
-                    let status = check_tool(&req);
-                    if status.status == "missing" || status.status == "version mismatch" {
-                        exit_code = 1;
+                    if seen_tools.insert(req.tool.clone()) {
+                        let status = check_tool(&req);
+                        if status.status == "missing" || status.status == "version mismatch" {
+                            exit_code = 1;
+                        }
+                        rows.push(status);
                     }
-                    rows.push(status);
                 }
                 break;
             }
@@ -46,10 +51,11 @@ pub fn run(dir: &Path, ui: &Ui, json: bool) -> i32 {
     }
 
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).unwrap_or_default()
-        );
+        let val = serde_json::json!({
+            "schema_version": 1,
+            "tools": rows,
+        });
+        println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
     } else {
         print_table(&rows, ui);
     }

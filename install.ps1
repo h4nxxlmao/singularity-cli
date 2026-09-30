@@ -38,7 +38,8 @@ if (-not $version) {
 if (-not $version) { Die "could not determine latest version" }
 
 $archive = "sgl-$version-$target.zip"
-$url     = "https://github.com/$Repo/releases/download/$version/$archive"
+$baseUrl = if ($env:SGL_DOWNLOAD_BASE) { $env:SGL_DOWNLOAD_BASE } else { "https://github.com/$Repo/releases/download/$version" }
+$url     = "$baseUrl/$archive"
 $tmp     = Join-Path $env:TEMP $archive
 
 Step "downloading sgl $version .." "done"
@@ -46,17 +47,33 @@ Invoke-WebRequest $url -OutFile $tmp -UseBasicParsing
 
 # ── verify checksum ───────────────────────────────────────────────────────────
 
-$sumsUrl = "https://github.com/$Repo/releases/download/$version/SHA256SUMS"
+$sumsUrl = "$baseUrl/SHA256SUMS"
+$sums = $null
 try {
-    $sums = (Invoke-WebRequest $sumsUrl -UseBasicParsing).Content
-    $expected = ($sums -split "`n" | Where-Object { $_ -match $archive }) -replace '\s+.*', ''
-    $actual   = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
-    if ($expected -and $actual -ne $expected.ToLower()) {
-        Die "checksum mismatch for $archive"
+    $raw = (Invoke-WebRequest $sumsUrl -UseBasicParsing).Content
+    if ($raw -is [byte[]]) {
+        $sums = [System.Text.Encoding]::UTF8.GetString($raw)
+    } else {
+        $sums = [string]$raw
     }
-    Step "verifying checksum ........." "ok"
 } catch {
-    Step "verifying checksum ........." "skipped"
+    # SHA256SUMS not found or network failure
+}
+
+if ($sums) {
+    $line = ($sums -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($archive) })
+    if ($line) {
+        $expected = ($line.Trim() -split '\s+')[0].ToLower()
+        $actual   = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+        if ($expected -and $actual -ne $expected) {
+            Die "checksum mismatch for $archive (expected $expected, got $actual)"
+        }
+        Step "verifying checksum ........." "ok"
+    } else {
+        Step "verifying checksum ........." "skipped (no entry for $archive)"
+    }
+} else {
+    Step "verifying checksum ........." "skipped (no SHA256SUMS)"
 }
 
 # ── install ───────────────────────────────────────────────────────────────────

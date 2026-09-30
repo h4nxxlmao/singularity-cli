@@ -14,7 +14,7 @@ pub mod monorepo;
 pub mod resolve;
 pub mod ui;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::Result;
@@ -51,8 +51,39 @@ async fn run(args: Cli) -> Result<()> {
         let verb = Verb::parse(verb_str).unwrap_or_else(|| Verb::Run(verb_str.clone()));
         let explanations = resolve::explain(&cwd, &verb, cfg);
         if explanations.is_empty() {
-            ui.error(&format!("no command found for '{verb_str}'"));
+            if args.json {
+                let out = serde_json::json!({
+                    "schema_version": 1,
+                    "verb": verb_str,
+                    "error": format!("no command found for '{verb_str}'"),
+                    "plans": []
+                });
+                println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            } else {
+                ui.error(&format!("no command found for '{verb_str}'"));
+            }
             process::exit(1);
+        }
+        if args.json {
+            let plans_json: Vec<serde_json::Value> = explanations
+                .iter()
+                .map(|(reason, plan)| {
+                    serde_json::json!({
+                        "program": plan.program,
+                        "args": plan.args,
+                        "cwd": plan.cwd,
+                        "env": plan.env,
+                        "reason": reason,
+                    })
+                })
+                .collect();
+            let out = serde_json::json!({
+                "schema_version": 1,
+                "verb": verb_str,
+                "plans": plans_json,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+            return Ok(());
         }
         for (reason, plan) in &explanations {
             exec::explain_plan(plan, reason, &ui);
@@ -64,88 +95,32 @@ async fn run(args: Cli) -> Result<()> {
     if args.command.is_none() {
         banner::print_banner(args.quiet);
         print_info(&cwd, cfg, &ui, args.json);
-        if !args.quiet {
+        if !args.quiet && !args.json {
             print_verb_list();
         }
         return Ok(());
     }
 
     let exit_code = match args.command.as_ref().unwrap() {
-        Commands::Setup => {
-            run_verb(
-                &cwd,
-                Verb::Setup,
-                args.project.as_deref(),
-                cfg,
-                &ui,
-                args.dry_run,
-            )
-            .await?
-        }
-        Commands::Dev => {
-            run_verb(
-                &cwd,
-                Verb::Dev,
-                args.project.as_deref(),
-                cfg,
-                &ui,
-                args.dry_run,
-            )
-            .await?
-        }
+        Commands::Setup => dispatch_verb(&cwd, Verb::Setup, vec![], &args, cfg, &ui).await?,
+        Commands::Dev => dispatch_verb(&cwd, Verb::Dev, vec![], &args, cfg, &ui).await?,
         Commands::Test { args: extra } => {
-            run_verb_with_args(
-                &cwd,
-                Verb::Test,
-                extra,
-                args.project.as_deref(),
-                cfg,
-                &ui,
-                args.dry_run,
-            )
-            .await?
+            dispatch_verb(&cwd, Verb::Test, extra.clone(), &args, cfg, &ui).await?
         }
-        Commands::Build => {
-            run_verb(
-                &cwd,
-                Verb::Build,
-                args.project.as_deref(),
-                cfg,
-                &ui,
-                args.dry_run,
-            )
-            .await?
-        }
-        Commands::Lint => {
-            run_verb(
-                &cwd,
-                Verb::Lint,
-                args.project.as_deref(),
-                cfg,
-                &ui,
-                args.dry_run,
-            )
-            .await?
-        }
-        Commands::Fmt => {
-            run_verb(
-                &cwd,
-                Verb::Fmt,
-                args.project.as_deref(),
-                cfg,
-                &ui,
-                args.dry_run,
-            )
-            .await?
-        }
-        Commands::Run { script, .. } => {
-            run_verb(
+        Commands::Build => dispatch_verb(&cwd, Verb::Build, vec![], &args, cfg, &ui).await?,
+        Commands::Lint => dispatch_verb(&cwd, Verb::Lint, vec![], &args, cfg, &ui).await?,
+        Commands::Fmt => dispatch_verb(&cwd, Verb::Fmt, vec![], &args, cfg, &ui).await?,
+        Commands::Run {
+            script,
+            args: extra,
+        } => {
+            dispatch_verb(
                 &cwd,
                 Verb::Run(script.clone()),
-                args.project.as_deref(),
+                extra.clone(),
+                &args,
                 cfg,
                 &ui,
-                args.dry_run,
             )
             .await?
         }
@@ -171,35 +146,42 @@ async fn run(args: Cli) -> Result<()> {
     Ok(())
 }
 
-async fn run_verb(
-    cwd: &std::path::Path,
+async fn dispatch_verb(
+    cwd: &Path,
     verb: Verb,
-    project_filter: Option<&str>,
+    extra_args: Vec<String>,
+    args: &Cli,
     cfg: Option<&config::Config>,
     ui: &Ui,
-    dry_run: bool,
 ) -> Result<i32> {
-    match resolve::resolve(cwd, &verb, project_filter, cfg) {
-        Ok(resolutions) => {
-            let mut code = 0;
-            for res in resolutions {
-                let c = exec::run_sequence(&res.plans, ui, dry_run).await?;
-                if c != 0 {
-                    code = c;
-                    break;
-                }
-            }
-            Ok(code)
-        }
-        Err(e) => {
-            ui.error(&format!("sgl: {e}"));
-            Ok(1)
-        }
+    let is_monorepo = monorepo::is_monorepo(cwd) || args.changed;
+    if is_monorepo {
+        let opts = monorepo::MonorepoOptions {
+            verb,
+            extra_args,
+            project_filter: args.project.clone(),
+            changed: args.changed,
+            serial: args.serial,
+            fail_fast: args.fail_fast,
+            dry_run: args.dry_run,
+        };
+        monorepo::run_monorepo(cwd, opts, ui, cfg).await
+    } else {
+        run_verb_with_args(
+            cwd,
+            verb,
+            &extra_args,
+            args.project.as_deref(),
+            cfg,
+            ui,
+            args.dry_run,
+        )
+        .await
     }
 }
 
 async fn run_verb_with_args(
-    cwd: &std::path::Path,
+    cwd: &Path,
     verb: Verb,
     extra_args: &[String],
     project_filter: Option<&str>,
@@ -230,16 +212,22 @@ async fn run_verb_with_args(
     }
 }
 
-fn print_info(cwd: &std::path::Path, cfg: Option<&config::Config>, ui: &Ui, json: bool) {
-    let mut projects = detect_all(cwd);
-
-    // If nothing detected at top level, look for monorepo sub-projects.
-    if projects.is_empty() {
-        projects = monorepo::discover(cwd);
-    }
+fn print_info(cwd: &Path, cfg: Option<&config::Config>, ui: &Ui, json: bool) {
+    let subs = monorepo::discover(cwd);
+    let projects = if subs.len() > 1 || (!subs.is_empty() && monorepo::is_workspace_root(cwd)) {
+        subs
+    } else {
+        let top = detect_all(cwd);
+        if top.is_empty() {
+            subs
+        } else {
+            top
+        }
+    };
 
     if json {
         let val = serde_json::json!({
+            "schema_version": 1,
             "directory": cwd,
             "projects": projects,
             "has_config": cfg.is_some(),
@@ -254,14 +242,36 @@ fn print_info(cwd: &std::path::Path, cfg: Option<&config::Config>, ui: &Ui, json
     }
 
     if !ui.quiet {
-        for p in &projects {
-            let pm = p
-                .package_manager
-                .as_deref()
-                .map(|pm| format!(" ({pm})"))
-                .unwrap_or_default();
-            eprintln!("  {} [{}]{}", p.name, p.kind, pm);
+        if projects.len() > 1 {
+            // Tree display for monorepo
+            let root_name = dir_name(cwd);
+            eprintln!("{root_name}");
+            for (i, p) in projects.iter().enumerate() {
+                let is_last = i == projects.len() - 1;
+                let branch = if is_last { "└── " } else { "├── " };
+                let pm = p
+                    .package_manager
+                    .as_deref()
+                    .map(|pm| format!(" ({pm})"))
+                    .unwrap_or_default();
+                let rel = p
+                    .root
+                    .strip_prefix(cwd)
+                    .map(|r| r.display().to_string())
+                    .unwrap_or_else(|_| p.name.clone());
+                eprintln!("{branch}{} [{kind}]{pm} ({rel})", p.name, kind = p.kind);
+            }
+        } else {
+            for p in &projects {
+                let pm = p
+                    .package_manager
+                    .as_deref()
+                    .map(|pm| format!(" ({pm})"))
+                    .unwrap_or_default();
+                eprintln!("  {} [{}]{}", p.name, p.kind, pm);
+            }
         }
+
         if let Some(cfg) = cfg {
             if let Some(name) = &cfg.project.name {
                 eprintln!("  config: singularity.toml (project: {name})");
@@ -272,6 +282,13 @@ fn print_info(cwd: &std::path::Path, cfg: Option<&config::Config>, ui: &Ui, json
     }
 }
 
+fn dir_name(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project")
+        .to_string()
+}
+
 fn print_verb_list() {
     eprintln!("\nAvailable commands:");
     for (verb, desc) in VERB_LIST {
@@ -279,7 +296,7 @@ fn print_verb_list() {
     }
     eprintln!();
     eprintln!(
-        "Global flags: --dry-run  --explain <verb>  --json  --quiet  --verbose  --cwd <path>"
+        "Global flags: --dry-run  --explain <verb>  --json  --quiet  --verbose  --cwd <path>  --project <name>  --changed  --serial  --fail-fast"
     );
 }
 
@@ -297,7 +314,7 @@ const VERB_LIST: &[(&str, &str)] = &[
     ("completions <shell>", "print shell completions"),
 ];
 
-fn init_config(cwd: &std::path::Path, _cfg: Option<&config::Config>, ui: &Ui) -> Result<()> {
+fn init_config(cwd: &Path, _cfg: Option<&config::Config>, ui: &Ui) -> Result<()> {
     let projects = detect_all(cwd);
     if projects.is_empty() {
         ui.warn("no projects detected; nothing to write");

@@ -49,8 +49,17 @@ pub fn load(dir: &Path) -> Result<Option<(Config, PathBuf)>> {
     }
     let content =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let config: Config =
-        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    let config: Config = toml::from_str(&content).map_err(|err| {
+        if let Some(span) = err.span() {
+            let start = span.start.min(content.len());
+            let prefix = &content[..start];
+            let line = prefix.lines().count().max(1);
+            let col = prefix.lines().last().map(|l| l.len() + 1).unwrap_or(1);
+            anyhow::anyhow!("{}:{}:{}: {}", path.display(), line, col, err.message())
+        } else {
+            anyhow::anyhow!("{}: {}", path.display(), err.message())
+        }
+    })?;
     Ok(Some((config, path)))
 }
 
@@ -170,5 +179,23 @@ dev = ["docker compose up -d db", "uvicorn app:app --reload"]
         assert_eq!(plans.len(), 2);
         assert_eq!(plans[0].program, "docker");
         assert_eq!(plans[1].program, "uvicorn");
+    }
+
+    #[test]
+    fn broken_config_names_file_and_line() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        // Line 2 has invalid syntax
+        fs::write(
+            dir.join("singularity.toml"),
+            "[project]\nname = \n[commands]\n",
+        )
+        .unwrap();
+        let err = load(dir).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("singularity.toml:2:"),
+            "expected file and line number in error: {msg}"
+        );
     }
 }

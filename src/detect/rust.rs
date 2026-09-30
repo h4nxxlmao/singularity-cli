@@ -33,6 +33,10 @@ impl Detector for RustDetector {
     fn plan(&self, project: &Project, verb: &Verb) -> Option<CommandPlan> {
         let cwd = project.root.clone();
 
+        let is_workspace = std::fs::read_to_string(cwd.join("Cargo.toml"))
+            .map(|c| c.contains("[workspace]"))
+            .unwrap_or(false);
+
         let plan = match verb {
             Verb::Setup => {
                 CommandPlan::simple("cargo", ["fetch"], cwd, "cargo fetch: Cargo.toml found")
@@ -59,13 +63,22 @@ impl Detector for RustDetector {
             Verb::Build => {
                 CommandPlan::simple("cargo", ["build"], cwd, "cargo build: Cargo.toml found")
             }
-            Verb::Lint => CommandPlan::simple(
-                "cargo",
-                ["clippy", "--", "-D", "warnings"],
-                cwd,
-                "cargo clippy: Cargo.toml found",
-            ),
-            Verb::Fmt => CommandPlan::simple("cargo", ["fmt"], cwd, "cargo fmt: Cargo.toml found"),
+            Verb::Lint => {
+                let args = if is_workspace {
+                    vec!["clippy", "--workspace", "--", "-D", "warnings"]
+                } else {
+                    vec!["clippy", "--", "-D", "warnings"]
+                };
+                CommandPlan::simple("cargo", args, cwd, "cargo clippy: Cargo.toml found")
+            }
+            Verb::Fmt => {
+                let args = if is_workspace {
+                    vec!["fmt", "--all"]
+                } else {
+                    vec!["fmt"]
+                };
+                CommandPlan::simple("cargo", args, cwd, "cargo fmt: Cargo.toml found")
+            }
             Verb::Run(script) => CommandPlan::simple(
                 "cargo",
                 ["run", "--bin", script.as_str()],

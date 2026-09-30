@@ -53,6 +53,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)

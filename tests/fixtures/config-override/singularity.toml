@@ -1,0 +1,5 @@
+[project]
+name = "override-demo"
+
+[commands]
+test = "echo custom-override-test"

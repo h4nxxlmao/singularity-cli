@@ -25,7 +25,7 @@ fn parse_make_targets(content: &str) -> HashMap<String, String> {
     targets
 }
 
-fn detect_runner(dir: &Path) -> Option<(&'static str, &'static str)> {
+pub(crate) fn detect_runner(dir: &Path) -> Option<(&'static str, &'static str)> {
     // (runner, marker file)
     if dir.join("Taskfile.yml").exists() || dir.join("Taskfile.yaml").exists() {
         return Some(("task", "Taskfile.yml"));
@@ -37,6 +37,19 @@ fn detect_runner(dir: &Path) -> Option<(&'static str, &'static str)> {
         return Some(("make", "Makefile"));
     }
     None
+}
+
+pub(crate) fn detect_make_scripts(dir: &Path) -> HashMap<String, String> {
+    if let Some((runner, marker)) = detect_runner(dir) {
+        if runner == "make" {
+            let content = std::fs::read_to_string(dir.join(marker)).unwrap_or_default();
+            parse_make_targets(&content)
+        } else {
+            HashMap::new()
+        }
+    } else {
+        HashMap::new()
+    }
 }
 
 impl Detector for MakeDetector {

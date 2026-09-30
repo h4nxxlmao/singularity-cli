@@ -39,7 +39,19 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME")]
     pub project: Option<String>,
 
-    /// Output as JSON (for info and doctor).
+    /// Only run in projects with files changed against base branch (monorepo).
+    #[arg(long, global = true)]
+    pub changed: bool,
+
+    /// Run monorepo projects sequentially instead of in parallel.
+    #[arg(long, global = true)]
+    pub serial: bool,
+
+    /// Abort execution on the first project failure (monorepo).
+    #[arg(long, global = true)]
+    pub fail_fast: bool,
+
+    /// Output as JSON (for info, doctor, and --explain).
     #[arg(long, global = true)]
     pub json: bool,
 
